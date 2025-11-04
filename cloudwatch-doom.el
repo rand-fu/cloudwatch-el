@@ -51,7 +51,7 @@
 
 ;; Doom-specific configuration
 (after! cloudwatch
-  (setq cloudwatch-aws-region (or (getenv "AWS_REGION") "us-west-2")))
+  (setq cloudwatch-aws-region (or (getenv "AWS_REGION") "us-east-1")))
 
 (provide 'cloudwatch-doom)
 ;;; cloudwatch-doom.el ends here
