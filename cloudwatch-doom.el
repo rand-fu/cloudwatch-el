@@ -12,6 +12,9 @@
 ;; Package-Requires: ((emacs "27.1") (cloudwatch "0.1.0"))
 ;;
 ;; This file is not part of GNU Emacs.
+;; 
+;; Licensed under the GNU General Public License v3.0 or later.
+;; See the LICENSE file in the project root for full license text.
 ;;
 ;;; Commentary:
 ;;
