@@ -121,6 +121,18 @@ Exception                # Find exceptions
 - No `like` operator - use `=` with wildcards instead
 - Combine conditions with `&&` (AND), `||` (OR)
 
+## Leveraging Emacs Power
+
+CloudWatch-el follows the Unix philosophy - it's just the pipe that brings data into Emacs. Once your logs are in a buffer, you can use all of Emacs' built-in tools:
+
+- `M-x occur` - Find patterns and jump between matches
+- `C-s` / `C-r` - Incremental search through results  
+- `M-x keep-lines` / `M-x flush-lines` - Further filter the buffer locally
+- `C-x r s` - Save regions to registers for comparison
+- `M-x write-region` - Export interesting sections
+- `M-x clone-indirect-buffer` - View multiple filtered versions side-by-side
+- `C-u C-x =` - Inspect characters (useful for debugging encoding issues)
+
 ## Optional enhancements for later
 
 - Support for CloudWatch Insights queries (more powerful than filter patterns)
