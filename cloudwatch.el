@@ -147,7 +147,7 @@ Example: \='(\"/aws/containerinsights/prod/application\"
                       cloudwatch-current-log-group
                       cloudwatch-current-region
                       (* (- (truncate (float-time)) (* cloudwatch-current-minutes 60)) 1000)
-                      cloudwatch-query-limit  ; Add limit here
+                      cloudwatch-query-limit
                       filter-args))
          ;; Set environment to avoid terminal warnings
          (process-environment (cons "AWS_PAGER="
@@ -218,7 +218,6 @@ Example: \='(\"/aws/containerinsights/prod/application\"
   (message "Decreasing limit to %d..." cloudwatch-query-limit)
   (cloudwatch-requery))
 
-;; Also update the tail function
 (defun cloudwatch-do-tail ()
   "Execute the tail command with current parameters."
   (interactive)
@@ -395,7 +394,7 @@ Example: \='(\"/aws/containerinsights/prod/application\"
   (interactive)
   (let ((pod (read-string "Pod name (supports * wildcards): ")))
     (setq cloudwatch-current-filter
-          (format "{ $.kubernetes.pod_name = *%s* }" pod)))  ; Changed from 'like' to wildcard
+          (format "{ $.kubernetes.pod_name = *%s* }" pod)))
   (cloudwatch-transient))
 
 ;;;###autoload
