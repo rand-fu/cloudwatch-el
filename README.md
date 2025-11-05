@@ -2,9 +2,9 @@
 
 ## Description
 
-Do you love Emacs? Do you have to work with CloudWatch? Do you find CloudWatch's web UI painful? Do you hate leaving Emacs? Now you don't have to! Why suffer the indignity of context-switching to a clunky web interface when the *One True Editor* can handle your logs with the elegance and power you deserve? 
+Do you love Emacs? Do you have to work with CloudWatch? Do you find CloudWatch's web UI painful? Do you hate leaving Emacs? Why suffer the indignity of context-switching to a clunky web interface when the *One True Editor* can handle your logs with the elegance and power you deserve? 
 
-This package liberates your CloudWatch logs from AWS console's tyranny, bringing them home where they belong - inside Emacs. 
+This package liberates your CloudWatch logs from the AWS console's tyranny, bringing them home where they belong - inside Emacs. 
 
 This started as a collection of functions I wrote for myself that got a little out of hand as I used them more. I thought they should be made into a proper package and shared in case it could help or inspire anyone else on their emacs journey. 
 
