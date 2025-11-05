@@ -78,7 +78,7 @@
 
 (defcustom cloudwatch-favorite-log-groups nil
   "List of frequently used CloudWatch log groups.
-Example: '(\"/aws/containerinsights/prod/application\"
+Example: \='(\"/aws/containerinsights/prod/application\"
            \"/aws/lambda/my-function\")"
   :type '(repeat string)
   :group 'cloudwatch)
@@ -128,32 +128,6 @@ Example: '(\"/aws/containerinsights/prod/application\"
       (message "Found %d log groups" (length cloudwatch-log-groups-cache))))
   cloudwatch-log-groups-cache)
 
-(defun cloudwatch-do-tail ()
-  "Execute the tail command with current parameters."
-  (interactive)
-  (unless cloudwatch-current-log-group
-    (user-error "Please select a log group first"))
-  (let* ((buffer-name (cloudwatch-extract-buffer-name cloudwatch-current-log-group 'tail))
-         (filter-args (if (and cloudwatch-current-filter
-                               (not (string-empty-p cloudwatch-current-filter)))
-                          (format " --filter-pattern '%s'" cloudwatch-current-filter)
-                        ""))
-         (cmd (format "aws logs tail '%s' --region %s --since %dm --follow --format short%s"
-                      cloudwatch-current-log-group
-                      cloudwatch-current-region
-                      cloudwatch-current-minutes
-                      filter-args)))
-    (when (get-buffer buffer-name)
-      (kill-buffer buffer-name))
-    (async-shell-command cmd buffer-name)
-    (with-current-buffer buffer-name
-      (ansi-color-for-comint-mode-on)
-      (font-lock-mode 1)
-      (cloudwatch-setup-highlighting)
-      (toggle-truncate-lines 1)
-      (goto-char (point-max))
-      (local-set-key (kbd "q") 'kill-current-buffer))))
-
 (defcustom cloudwatch-query-limit 2500
   "Maximum number of log events to retrieve in query mode."
   :type 'integer
@@ -201,11 +175,11 @@ Example: '(\"/aws/containerinsights/prod/application\"
         (local-set-key (kbd "-" ) 'cloudwatch-decrease-limit))
       (switch-to-buffer output-buffer)
       ;; Run async
-      (let ((proc (start-process-shell-command 
-                   "cloudwatch-query" 
-                   output-buffer 
+      (let ((proc (start-process-shell-command
+                   "cloudwatch-query"
+                   output-buffer
                    cmd)))
-        (set-process-sentinel 
+        (set-process-sentinel
          proc
          (lambda (process event)
            (when (string-match-p "finished\\|exited" event)
@@ -251,18 +225,18 @@ Example: '(\"/aws/containerinsights/prod/application\"
   (unless cloudwatch-current-log-group
     (user-error "Please select a log group first"))
   (let* ((buffer-name (cloudwatch-extract-buffer-name cloudwatch-current-log-group 'tail))
-         (filter-args (if (and cloudwatch-current-filter 
+         (filter-args (if (and cloudwatch-current-filter
                                (not (string-empty-p cloudwatch-current-filter)))
                           (format " --filter-pattern '%s'" cloudwatch-current-filter)
                         ""))
-         (cmd (format "aws logs tail '%s' --region %s --since %dm --follow --format short%s" 
+         (cmd (format "aws logs tail '%s' --region %s --since %dm --follow --format short%s"
                       cloudwatch-current-log-group
                       cloudwatch-current-region
-                      cloudwatch-current-minutes 
+                      cloudwatch-current-minutes
                       filter-args))
          ;; Set environment to avoid terminal warnings
-         (process-environment (cons "AWS_PAGER=" 
-                                    (cons "TERM=dumb" 
+         (process-environment (cons "AWS_PAGER="
+                                    (cons "TERM=dumb"
                                           process-environment))))
     (when (get-buffer buffer-name)
       (kill-buffer buffer-name))
@@ -296,18 +270,18 @@ Example: '(\"/aws/containerinsights/prod/application\"
   ["CloudWatch Settings"
    [("r" "Region" cloudwatch-set-region
      :description (lambda () (format "Region: %s" cloudwatch-current-region)))
-    ("l" "Log Group" cloudwatch-set-log-group 
-     :description (lambda () (format "Log Group: %s" 
+    ("l" "Log Group" cloudwatch-set-log-group
+     :description (lambda () (format "Log Group: %s"
                                      (or (and cloudwatch-current-log-group
                                               (truncate-string-to-width cloudwatch-current-log-group 50))
                                          "Not set"))))
     ("L" "Browse Log Groups" cloudwatch-browse-log-groups)]
-   [("m" "Minutes back" cloudwatch-set-minutes 
+   [("m" "Minutes back" cloudwatch-set-minutes
      :description (lambda () (format "Minutes: %d" cloudwatch-current-minutes)))
     ("M" "Query limit" cloudwatch-set-query-limit
      :description (lambda () (format "Query limit: %d events" cloudwatch-query-limit)))
     ("f" "Filter pattern" cloudwatch-set-filter
-     :description (lambda () (format "Filter: %s" 
+     :description (lambda () (format "Filter: %s"
                                      (if (string-empty-p cloudwatch-current-filter)
                                          "None"
                                        (truncate-string-to-width cloudwatch-current-filter 40)))))
@@ -354,7 +328,7 @@ Example: '(\"/aws/containerinsights/prod/application\"
   (interactive)
   (setq cloudwatch-current-region
         (completing-read "AWS Region: "
-                         '("us-west-1" "us-west-2" "us-east-1" "us-east-2" 
+                         '("us-west-1" "us-west-2" "us-east-1" "us-east-2"
                            "eu-west-1" "eu-central-1" "ap-southeast-1" "ap-northeast-1")
                          nil nil cloudwatch-current-region))
   ;; Clear cache when region changes
@@ -383,7 +357,7 @@ Example: '(\"/aws/containerinsights/prod/application\"
                (not (member cloudwatch-current-log-group cloudwatch-favorite-log-groups))
                (y-or-n-p "Add to favorites? "))
       (customize-save-variable 'cloudwatch-favorite-log-groups
-                               (append cloudwatch-favorite-log-groups 
+                               (append cloudwatch-favorite-log-groups
                                        (list cloudwatch-current-log-group)))))
   (cloudwatch-transient))
 
@@ -412,7 +386,7 @@ Example: '(\"/aws/containerinsights/prod/application\"
   "Set namespace filter."
   (interactive)
   (let ((namespace (read-string "Namespace: ")))
-    (setq cloudwatch-current-filter 
+    (setq cloudwatch-current-filter
           (format "{ $.kubernetes.namespace_name = \"%s\" }" namespace)))
   (cloudwatch-transient))
 
@@ -420,7 +394,7 @@ Example: '(\"/aws/containerinsights/prod/application\"
   "Set pod name filter."
   (interactive)
   (let ((pod (read-string "Pod name (supports * wildcards): ")))
-    (setq cloudwatch-current-filter 
+    (setq cloudwatch-current-filter
           (format "{ $.kubernetes.pod_name = *%s* }" pod)))  ; Changed from 'like' to wildcard
   (cloudwatch-transient))
 
