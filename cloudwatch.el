@@ -6,7 +6,7 @@
 ;; Maintainer: Randol Reeves <randol.reeves+emacs@gmail.com>
 ;; Created: November 04, 2025
 ;; Modified: November 04, 2025
-;; Version: 0.1.0
+;; Version: 0.1.1
 ;; Keywords: tools aws cloud logs
 ;; Homepage: https://github.com/rand-fu/cloudwatch-el
 ;; Package-Requires: ((emacs "27.1") (transient "0.3.0"))
