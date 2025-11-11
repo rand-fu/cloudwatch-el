@@ -76,6 +76,149 @@
 (defvar cloudwatch-log-groups-cache nil)
 (defvar cloudwatch-cache-time nil)
 
+(defvar cloudwatch-insights-query nil
+  "Current CloudWatch Insights query string.")
+
+(defvar cloudwatch-insights-history nil
+  "History of CloudWatch Insights queries.")
+
+(defcustom cloudwatch-insights-presets
+  '(("Top 10 slowest requests" . "fields @timestamp, @message | filter duration > 0 | sort duration desc | limit 10")
+    ("Errors by count" . "fields @message | filter @message like /ERROR/ | stats count() by bin(5m)")
+    ("Request rate" . "fields @timestamp | stats count() by bin(1m) as requests_per_minute")
+    ("5xx errors timeline" . "fields @timestamp | filter statusCode >= 500 | stats count() by bin(5m)")
+    ("Memory usage stats" . "fields @timestamp, memory_used | stats avg(memory_used), max(memory_used), min(memory_used) by bin(5m)")
+    ("Unique users" . "fields userId | stats count_distinct(userId) as unique_users by bin(1h)")
+    ("Pod restarts" . "filter @message like /restarting/ | stats count() by kubernetes.pod_name"))
+  "Preset CloudWatch Insights queries."
+  :type '(alist :key-type string :value-type string)
+  :group 'cloudwatch)
+
+(defun cloudwatch-do-insights-query ()
+  "Execute CloudWatch Insights query."
+  (interactive)
+  (unless cloudwatch-current-log-group
+    (user-error "Please select a log group first"))
+  (unless cloudwatch-insights-query
+    (user-error "Please set an Insights query first"))
+  
+  (let* ((buffer-name (format "*CW-Insights:%s:%s*" 
+                              cloudwatch-current-region
+                              (car (last (split-string cloudwatch-current-log-group "/") 2))))
+         (query-id nil)
+         (output-buffer (get-buffer-create buffer-name)))
+    
+    ;; Start the query
+    (message "Starting Insights query...")
+    (let* ((start-time (* (- (truncate (float-time)) (* cloudwatch-current-minutes 60)) 1000))
+           (end-time (* (truncate (float-time)) 1000))
+           (start-cmd (format "aws logs start-query --log-group-name '%s' --region %s --start-time %d --end-time %d --query-string '%s' --output text"
+                              cloudwatch-current-log-group
+                              cloudwatch-current-region
+                              start-time
+                              end-time
+                              cloudwatch-insights-query))
+           (query-id-output (shell-command-to-string start-cmd)))
+      (setq query-id (string-trim query-id-output))
+      
+      (with-current-buffer output-buffer
+        (erase-buffer)
+        (insert "═══ CloudWatch Insights Query ═══\n")
+        (insert (format "Log Group: %s\n" cloudwatch-current-log-group))
+        (insert (format "Region: %s\n" cloudwatch-current-region))
+        (insert (format "Time Range: Last %d minutes\n" cloudwatch-current-minutes))
+        (insert (format "Query: %s\n" cloudwatch-insights-query))
+        (insert "─────────────────────────────────\n")
+        (insert "⏳ Query running...\n"))
+      
+      (switch-to-buffer output-buffer)
+      
+      ;; Poll for results
+      (cloudwatch-insights-poll-results query-id output-buffer))))
+
+(defun cloudwatch-insights-poll-results (query-id buffer)
+  "Poll for Insights query results."
+  (run-with-timer
+   1 nil
+   (lambda ()
+     (let* ((cmd (format "aws logs get-query-results --query-id %s --region %s --output json"
+                         query-id
+                         cloudwatch-current-region))
+            (result (json-parse-string (shell-command-to-string cmd) :object-type 'alist))
+            (status (alist-get 'status result)))
+       (cond
+        ((string= status "Complete")
+         (with-current-buffer buffer
+           (save-excursion
+             (goto-char (point-min))
+             (search-forward "⏳ Query running..." nil t)
+             (replace-match "✓ Query complete!")
+             (goto-char (point-max))
+             (insert "\n")
+             (cloudwatch-insights-format-results (alist-get 'results result)))
+           (cloudwatch-setup-highlighting)
+           (read-only-mode 1)
+           (local-set-key (kbd "q") 'kill-current-buffer)
+           (local-set-key (kbd "g") 'cloudwatch-rerun-insights)
+           (message "Insights query complete!")))
+        
+        ((string= status "Failed")
+         (with-current-buffer buffer
+           (goto-char (point-min))
+           (search-forward "⏳ Query running..." nil t)
+           (replace-match "❌ Query failed!")
+           (message "Insights query failed!")))
+        
+        (t ; Still running
+         (cloudwatch-insights-poll-results query-id buffer)))))))
+
+(defun cloudwatch-insights-format-results (results)
+  "Format Insights query results for display."
+  (if (not results)
+      (insert "No results found.\n")
+    ;; Get field names from first result
+    (let ((fields (mapcar (lambda (item) (alist-get 'field item)) (aref results 0))))
+      ;; Print header
+      (insert (mapconcat (lambda (field) 
+                           (format "%-30s" field))
+                         fields " | "))
+      (insert "\n")
+      (insert (make-string 100 ?─))
+      (insert "\n")
+      ;; Print each row
+      (dotimes (i (length results))
+        (let ((row (aref results i)))
+          (insert (mapconcat (lambda (item)
+                               (let ((value (alist-get 'value item)))
+                                 (format "%-30s" 
+                                         (truncate-string-to-width 
+                                          (or value "")
+                                          30 nil nil t))))
+                             row " | "))
+          (insert "\n"))))))
+
+(defun cloudwatch-set-insights-query ()
+  "Set CloudWatch Insights query from presets or custom."
+  (interactive)
+  (let* ((choices (append 
+                   '(("Custom query" . custom))
+                   cloudwatch-insights-presets))
+         (choice (completing-read "Select Insights query: "
+                                  (mapcar #'car choices)
+                                  nil t nil 'cloudwatch-insights-history)))
+    (setq cloudwatch-insights-query
+          (if (string= choice "Custom query")
+              (read-string "Enter Insights query: " 
+                           cloudwatch-insights-query
+                           'cloudwatch-insights-history)
+            (cdr (assoc choice choices)))))
+  (cloudwatch-transient))
+
+(defun cloudwatch-rerun-insights ()
+  "Rerun the last Insights query."
+  (interactive)
+  (cloudwatch-do-insights-query))
+
 (defcustom cloudwatch-favorite-log-groups nil
   "List of frequently used CloudWatch log groups.
 Example: \='(\"/aws/containerinsights/prod/application\"
@@ -292,6 +435,13 @@ Example: \='(\"/aws/containerinsights/prod/application\"
    [("n" "Namespace" cloudwatch-set-namespace-filter)
     ("p" "Pod name" cloudwatch-set-pod-filter)
     ("c" "Clear filter" (lambda () (interactive) (setq cloudwatch-current-filter "") (cloudwatch-transient)))]]
+  ["CloudWatch Insights"
+   [("i" "Set Insights query" cloudwatch-set-insights-query
+     :description (lambda ()
+                    (if cloudwatch-insights-query
+                        (format "Query: %s" (truncate-string-to-width cloudwatch-insights-query 40))
+                      "Query: Not set")))
+    ("I" "Run Insights query" cloudwatch-do-insights-query :transient nil)]]
   ["Favorites"
    :class transient-column
    :setup-children cloudwatch-favorites-setup]

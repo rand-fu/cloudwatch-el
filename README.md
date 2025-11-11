@@ -137,5 +137,4 @@ CloudWatch-el follows the Unix philosophy - it's just the pipe that brings data 
 
 - Support for CloudWatch Insights queries (more powerful than filter patterns)
 - Save filter history between sessions
-- Export logs to file
 - Log stream selection within a log group
