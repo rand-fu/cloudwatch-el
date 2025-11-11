@@ -6,8 +6,8 @@
 ;; Maintainer: Randol Reeves <randol.reeves+emacs@gmail.com>
 ;; Created: November 04, 2025
 ;; Modified: November 04, 2025
-;; Version: 0.1.1
-;; Keywords: tools aws cloud logs
+;; Version: 0.2.0
+;; Keywords: tools aws cloudwatch logs monitoring devops kubernetes observability
 ;; Homepage: https://github.com/rand-fu/cloudwatch-el
 ;; Package-Requires: ((emacs "27.1") (transient "0.3.0"))
 ;;
@@ -69,12 +69,278 @@
   :type 'string
   :group 'cloudwatch)
 
-(defvar cloudwatch-current-log-group nil)
-(defvar cloudwatch-current-minutes 5)
-(defvar cloudwatch-current-filter "")
-(defvar cloudwatch-current-region cloudwatch-default-region)
-(defvar cloudwatch-log-groups-cache nil)
-(defvar cloudwatch-cache-time nil)
+(defvar cloudwatch-current-log-group nil
+  "Currently selected CloudWatch log group.")
+
+(defvar cloudwatch-current-minutes 5
+  "Number of minutes to look back when querying or tailing logs.")
+
+(defvar cloudwatch-current-filter ""
+  "Current filter pattern for log queries.
+Can be a simple text pattern or CloudWatch JSON filter syntax.")
+
+(defvar cloudwatch-current-region cloudwatch-default-region
+  "Currently active AWS region for CloudWatch operations.")
+
+(defvar cloudwatch-log-groups-cache nil
+  "Cached list of log groups for the current region.
+Automatically refreshed when region changes or cache expires.")
+
+(defvar cloudwatch-cache-time nil
+  "Timestamp when log groups cache was last updated.
+Used to determine if cache needs refresh (10 minute expiry).")
+
+(defvar cloudwatch-insights-query nil
+  "Current CloudWatch Insights query string.")
+
+(defvar cloudwatch-insights-history nil
+  "History of CloudWatch Insights queries.")
+
+;; These are generalized examples, usefulness depends on users log format and needs
+(defcustom cloudwatch-insights-presets
+  '(("Top 10 slowest requests" . "fields @timestamp, @message | filter duration > 0 | sort duration desc | limit 10")
+    ("Errors by count" . "fields @message | filter @message like /ERROR/ | stats count() by bin(5m)")
+    ("Request rate" . "fields @timestamp | stats count() by bin(1m) as requests_per_minute")
+    ("5xx errors timeline" . "fields @timestamp | filter statusCode >= 500 | stats count() by bin(5m)")
+    ("Memory usage stats" . "fields @timestamp, memory_used | stats avg(memory_used), max(memory_used), min(memory_used) by bin(5m)")
+    ("Unique users" . "fields userId | stats count_distinct(userId) as unique_users by bin(1h)")
+    ("Pod restarts" . "filter @message like /restarting/ | stats count() by kubernetes.pod_name"))
+  "Preset CloudWatch Insights queries."
+  :type '(alist :key-type string :value-type string)
+  :group 'cloudwatch)
+
+(defun cloudwatch-do-insights-query ()
+  "Execute CloudWatch Insights query."
+  (interactive)
+  (unless cloudwatch-current-log-group
+    (user-error "Please select a log group first"))
+  (unless cloudwatch-insights-query
+    (user-error "Please set an Insights query first"))
+  
+  (let* ((buffer-name (format "*CW-Insights:%s:%s*"
+                              cloudwatch-current-region
+                              (car (last (split-string cloudwatch-current-log-group "/") 2))))
+         (query-id nil)
+         (output-buffer (get-buffer-create buffer-name)))
+    
+    ;; Start the query
+    (message "Starting Insights query...")
+    (let* ((start-time (* (- (truncate (float-time)) (* cloudwatch-current-minutes 60)) 1000))
+           (end-time (* (truncate (float-time)) 1000))
+           (start-cmd (format "aws logs start-query --log-group-name '%s' --region %s --start-time %d --end-time %d --query-string '%s' --output text"
+                              cloudwatch-current-log-group
+                              cloudwatch-current-region
+                              start-time
+                              end-time
+                              cloudwatch-insights-query))
+           (query-id-output (shell-command-to-string start-cmd)))
+      (setq query-id (string-trim query-id-output))
+      
+      (with-current-buffer output-buffer
+        (erase-buffer)
+        (insert "═══ CloudWatch Insights Query ═══\n")
+        (insert (format "Log Group: %s\n" cloudwatch-current-log-group))
+        (insert (format "Region: %s\n" cloudwatch-current-region))
+        (insert (format "Time Range: Last %d minutes\n" cloudwatch-current-minutes))
+        (insert (format "Query: %s\n" cloudwatch-insights-query))
+        (insert "─────────────────────────────────\n")
+        (insert "⏳ Query running...\n"))
+      
+      (switch-to-buffer output-buffer)
+      
+      ;; Poll for results
+      (cloudwatch-insights-poll-results query-id output-buffer))))
+
+;; Define a results mode
+(define-derived-mode cloudwatch-results-mode special-mode "CW-Results"
+  "Mode for viewing CloudWatch query results."
+  (setq-local truncate-lines t)
+  (setq-local buffer-read-only t))
+
+;; Helper function
+(defun cloudwatch--safe-string (value)
+  "Convert VALUE to a safe string representation."
+  (cond
+   ((stringp value) value)
+   ((null value) "")
+   (t (format "%s" value))))
+
+(defun cloudwatch-insights-poll-results (query-id buffer)
+  "Poll for Insights QUERY-ID results in BUFFER."
+  (run-with-timer
+   1 nil
+   (lambda ()
+     (let* ((cmd (format "aws logs get-query-results --query-id %s --region %s --output json"
+                         query-id
+                         cloudwatch-current-region))
+            (result (json-parse-string (shell-command-to-string cmd) :object-type 'alist))
+            (status (alist-get 'status result)))
+       (cond
+        ((string= status "Complete")
+         (with-current-buffer buffer
+           (let ((inhibit-read-only t))
+             (save-excursion
+               (goto-char (point-min))
+               (search-forward "⏳ Query running..." nil t)
+               (replace-match "✓ Query complete!"))
+             ;; Pass both results and query info
+             (let ((query-info (list :log-group cloudwatch-current-log-group
+                                     :region cloudwatch-current-region
+                                     :time-range (format "Last %d minutes" cloudwatch-current-minutes)
+                                     :query cloudwatch-insights-query)))
+               (cloudwatch-insights-format-results (alist-get 'results result) query-info)))
+           (cloudwatch-setup-highlighting)
+           (read-only-mode 1)
+           (local-set-key (kbd "q") 'kill-current-buffer)
+           (local-set-key (kbd "g") 'cloudwatch-rerun-insights)
+           (message "Insights query complete!")))
+        
+        ((string= status "Failed")
+         (with-current-buffer buffer
+           (let ((inhibit-read-only t))
+             (goto-char (point-min))
+             (search-forward "⏳ Query running..." nil t)
+             (replace-match "❌ Query failed!"))
+           (message "Insights query failed!")))
+        
+        (t ; Still running?
+         (cloudwatch-insights-poll-results query-id buffer)))))))
+
+(defun cloudwatch-insights-format-results (results query-info)
+  "Format Insights QUERY-INFO and RESULTS for display."
+  (if (not results)
+      (insert "No results found.\n")
+    ;; Store results for detail view
+    (setq-local cloudwatch-insights-results results)
+    (setq-local cloudwatch-insights-query-info query-info)
+    
+    ;; Get field names from first result
+    (let ((fields (mapcar (lambda (item) (alist-get 'field item)) (aref results 0))))
+      ;; Define column widths based on field names
+      ;; TODO: this needs some finess. I think it largely depends on your log format. Maybe make it configrable by the user with vars.
+      (let ((field-widths (mapcar (lambda (field)
+                                    (cond
+                                     ;; Give more space to log/message fields
+                                     ((member field '("log" "@message" "message")) 100)
+                                     ;; Medium space for these
+                                     ((member field '("@logStream")) 50)
+                                     ;; Timestamp gets specific width
+                                     ((member field '("@timestamp")) 30)
+                                     ;; Pointer/ID fields can be smaller
+                                     ((member field '("@ptr" "@id" "@requestId")) 15)
+                                     ;; Default for everything else
+                                     (t 25)))
+                                  fields)))
+        ;; Print header
+        (insert (mapconcat (lambda (pair)
+                             (let ((field (car pair))
+                                   (width (cdr pair)))
+                               (format (format "%%-%ds" width)
+                                       (truncate-string-to-width field width nil nil "…"))))
+                           (cl-mapcar #'cons fields field-widths) " | "))
+        (insert "\n")
+        (insert (make-string (+ (apply #'+ field-widths)
+                                (* (1- (length fields)) 3)) ?─))
+        (insert "\n")
+        ;; Print each row with click handler
+        (dotimes (i (length results))
+          (let ((row (aref results i))
+                (start (point)))
+            (insert (mapconcat (lambda (pair)
+                                 (let* ((item (car pair))
+                                        (width (cdr pair))
+                                        (value (alist-get 'value item)))
+                                   (format (format "%%-%ds" width)
+                                           (truncate-string-to-width
+                                            (or value "")
+                                            (1- width) nil nil "…"))))
+                               (cl-mapcar #'cons row field-widths) " | "))
+            (insert "\n")
+            ;; We want some clickyness - add properties to make the row clickable
+            (add-text-properties start (point)
+                                 (list 'cloudwatch-row-index i
+                                       'keymap (let ((map (make-sparse-keymap)))
+                                                 (define-key map (kbd "RET") 'cloudwatch-insights-show-detail)
+                                                 (define-key map (kbd "SPC") 'cloudwatch-insights-show-detail)
+                                                 map)
+                                       'help-echo "Press RET to view full record"
+                                       'mouse-face 'highlight)))))))
+  
+  (insert "\n" (propertize "Tip: Press RET on any row to view full details"
+                           'face 'font-lock-comment-face)))
+
+(defun cloudwatch--pad-or-truncate (str width)
+  "Pad STR to WIDTH or truncate with ellipsis if longer."
+  (let ((len (length str)))
+    (cond
+     ((= len width) str)
+     ((< len width) (concat str (make-string (- width len) ?\s)))
+     (t (concat (substring str 0 (- width 1)) "…")))))
+
+(defun cloudwatch-insights-show-detail ()
+  "Show full details for the log entry at point."
+  (interactive)
+  (let ((row-index (get-text-property (point) 'cloudwatch-row-index)))
+    (when row-index
+      (let* ((results cloudwatch-insights-results)
+             (row (aref results row-index)))
+        (with-current-buffer (get-buffer-create "*CloudWatch Entry Detail*")
+          (let ((inhibit-read-only t))
+            (erase-buffer)
+            (insert (propertize "═══ CloudWatch Log Entry Detail ═══\n\n" 'face 'bold))
+            
+            ;; Show all fields with full content
+            (mapc (lambda (item)
+                    (let ((field (alist-get 'field item))
+                          (value (alist-get 'value item)))
+                      (insert (propertize (format "%s:\n" field)
+                                          'face 'font-lock-keyword-face))
+                      ;; Pretty-print JSON if detected
+                      (if (and value
+                               (string-match "^[[:space:]]*[{\\[]" value))
+                          (condition-case nil
+                              (progn
+                                (insert value)
+                                (save-excursion
+                                  (backward-char (length value))
+                                  (json-pretty-print (point) (point-max))))
+                            (error (insert value)))
+                        (insert (or value "null")))
+                      (insert "\n\n")))
+                  row)
+            
+            (goto-char (point-min))
+            (view-mode))
+          (pop-to-buffer (current-buffer)))))))
+
+(define-derived-mode cloudwatch-detail-mode special-mode "CW-Detail"
+  "Mode for viewing CloudWatch log entry details."
+  (setq-local revert-buffer-function
+              (lambda (_ignore-auto _noconfirm)
+                (when (boundp 'cloudwatch-insights-show-detail)
+                  (call-interactively 'cloudwatch-insights-show-detail)))))
+
+(defun cloudwatch-set-insights-query ()
+  "Set CloudWatch Insights query from presets or custom."
+  (interactive)
+  (let* ((choices (append
+                   '(("Custom query" . custom))
+                   cloudwatch-insights-presets))
+         (choice (completing-read "Select Insights query: "
+                                  (mapcar #'car choices)
+                                  nil t nil 'cloudwatch-insights-history)))
+    (setq cloudwatch-insights-query
+          (if (string= choice "Custom query")
+              (read-string "Enter Insights query: "
+                           cloudwatch-insights-query
+                           'cloudwatch-insights-history)
+            (cdr (assoc choice choices)))))
+  (cloudwatch-transient))
+
+(defun cloudwatch-rerun-insights ()
+  "Rerun the last Insights query."
+  (interactive)
+  (cloudwatch-do-insights-query))
 
 (defcustom cloudwatch-favorite-log-groups nil
   "List of frequently used CloudWatch log groups.
@@ -117,7 +383,7 @@ Example: \='(\"/aws/containerinsights/prod/application\"
   (when (or refresh
             (null cloudwatch-log-groups-cache)
             (null cloudwatch-cache-time)
-            (> (- (float-time) cloudwatch-cache-time) 300)) ; 5 min cache
+            (> (- (float-time) cloudwatch-cache-time) 600)) ; 10 min cache
     (message "Fetching log groups from %s..." cloudwatch-current-region)
     (let* ((cmd (format "aws logs describe-log-groups --region %s --query 'logGroups[].logGroupName' --output text"
                         cloudwatch-current-region))
@@ -149,7 +415,7 @@ Example: \='(\"/aws/containerinsights/prod/application\"
                       (* (- (truncate (float-time)) (* cloudwatch-current-minutes 60)) 1000)
                       cloudwatch-query-limit
                       filter-args))
-         ;; Set environment to avoid terminal warnings
+         ;; Set environment to avoid terminal warnings - DUMB
          (process-environment (cons "AWS_PAGER="
                                     (cons "TERM=dumb"
                                           process-environment))))
@@ -233,7 +499,7 @@ Example: \='(\"/aws/containerinsights/prod/application\"
                       cloudwatch-current-region
                       cloudwatch-current-minutes
                       filter-args))
-         ;; Set environment to avoid terminal warnings
+         ;; Set environment to avoid terminal warnings - still DUMB
          (process-environment (cons "AWS_PAGER="
                                     (cons "TERM=dumb"
                                           process-environment))))
@@ -263,6 +529,7 @@ Example: \='(\"/aws/containerinsights/prod/application\"
   (highlight-regexp "\"[^\"]+\":" 'font-lock-keyword-face)
   (highlight-regexp "[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}" 'font-lock-comment-face))
 
+;; Transient menu magic
 (transient-define-prefix cloudwatch-transient ()
   "CloudWatch Logs Viewer"
   :value '()
@@ -286,18 +553,27 @@ Example: \='(\"/aws/containerinsights/prod/application\"
                                        (truncate-string-to-width cloudwatch-current-filter 40)))))
     ("R" "Refresh cache" cloudwatch-refresh-cache)]]
   ["Quick Filters"
+   :description "Simple pattern matching for live tailing and quick searches"
    [("E" "Errors only" (lambda () (interactive) (setq cloudwatch-current-filter "ERROR") (cloudwatch-transient)))
     ("W" "Warnings" (lambda () (interactive) (setq cloudwatch-current-filter "WARN") (cloudwatch-transient)))
     ("5" "5xx errors" (lambda () (interactive) (setq cloudwatch-current-filter "{ $.statusCode >= 500 }") (cloudwatch-transient)))]
    [("n" "Namespace" cloudwatch-set-namespace-filter)
     ("p" "Pod name" cloudwatch-set-pod-filter)
     ("c" "Clear filter" (lambda () (interactive) (setq cloudwatch-current-filter "") (cloudwatch-transient)))]]
+  ["CloudWatch Insights"
+   :description "Advanced queries for aggregations, stats, and complex analysis"
+   [("i" "Set Insights query" cloudwatch-set-insights-query
+     :description (lambda ()
+                    (if cloudwatch-insights-query
+                        (format "Query: %s" (truncate-string-to-width cloudwatch-insights-query 40))
+                      "Query: Not set")))
+    ("I" "Run Insights query" cloudwatch-do-insights-query :transient nil)]]
   ["Favorites"
    :class transient-column
    :setup-children cloudwatch-favorites-setup]
   ["Actions"
-   [("t" "Start Tailing (live)" cloudwatch-do-tail :transient nil)
-    ("Q" "Query logs (snapshot)" cloudwatch-do-query :transient nil)
+   [("t" "Tail: Live streaming logs with filters" cloudwatch-do-tail :transient nil)
+    ("Q" "Query: Snapshot search with filters" cloudwatch-do-query :transient nil)
     ("q" "Quit" transient-quit-one)]])
 
 (defun cloudwatch-set-query-limit ()
