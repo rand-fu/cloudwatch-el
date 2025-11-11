@@ -6,7 +6,7 @@
 ;; Maintainer: Randol Reeves <randol.reeves+emacs@gmail.com>
 ;; Created: November 04, 2025
 ;; Modified: November 04, 2025
-;; Version: 0.2.0
+;; Version: 0.2.1
 ;; Keywords: tools aws cloudwatch logs monitoring devops kubernetes observability
 ;; Homepage: https://github.com/rand-fu/cloudwatch-el
 ;; Package-Requires: ((emacs "27.1") (transient "0.3.0"))
@@ -395,7 +395,8 @@ Example: \='(\"/aws/containerinsights/prod/application\"
   cloudwatch-log-groups-cache)
 
 (defcustom cloudwatch-query-limit 2500
-  "Maximum number of log events to retrieve in query mode."
+  "Maximum number of log events to retrieve in basic query mode.
+Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
   :type 'integer
   :group 'cloudwatch)
 
