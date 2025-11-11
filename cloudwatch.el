@@ -102,7 +102,7 @@
   (unless cloudwatch-insights-query
     (user-error "Please set an Insights query first"))
   
-  (let* ((buffer-name (format "*CW-Insights:%s:%s*" 
+  (let* ((buffer-name (format "*CW-Insights:%s:%s*"
                               cloudwatch-current-region
                               (car (last (split-string cloudwatch-current-log-group "/") 2))))
          (query-id nil)
@@ -136,8 +136,22 @@
       ;; Poll for results
       (cloudwatch-insights-poll-results query-id output-buffer))))
 
+;; Define a results mode
+(define-derived-mode cloudwatch-results-mode special-mode "CW-Results"
+  "Mode for viewing CloudWatch query results."
+  (setq-local truncate-lines t)
+  (setq-local buffer-read-only t))
+
+;; Helper function
+(defun cloudwatch--safe-string (value)
+  "Convert VALUE to a safe string representation."
+  (cond
+   ((stringp value) value)
+   ((null value) "")
+   (t (format "%s" value))))
+
 (defun cloudwatch-insights-poll-results (query-id buffer)
-  "Poll for Insights query results."
+  "Poll for Insights QUERY-ID results in BUFFER."
   (run-with-timer
    1 nil
    (lambda ()
@@ -149,13 +163,17 @@
        (cond
         ((string= status "Complete")
          (with-current-buffer buffer
-           (save-excursion
-             (goto-char (point-min))
-             (search-forward "⏳ Query running..." nil t)
-             (replace-match "✓ Query complete!")
-             (goto-char (point-max))
-             (insert "\n")
-             (cloudwatch-insights-format-results (alist-get 'results result)))
+           (let ((inhibit-read-only t))
+             (save-excursion
+               (goto-char (point-min))
+               (search-forward "⏳ Query running..." nil t)
+               (replace-match "✓ Query complete!"))
+             ;; Pass both results and query info
+             (let ((query-info (list :log-group cloudwatch-current-log-group
+                                     :region cloudwatch-current-region
+                                     :time-range (format "Last %d minutes" cloudwatch-current-minutes)
+                                     :query cloudwatch-insights-query)))
+               (cloudwatch-insights-format-results (alist-get 'results result) query-info)))
            (cloudwatch-setup-highlighting)
            (read-only-mode 1)
            (local-set-key (kbd "q") 'kill-current-buffer)
@@ -164,38 +182,107 @@
         
         ((string= status "Failed")
          (with-current-buffer buffer
-           (goto-char (point-min))
-           (search-forward "⏳ Query running..." nil t)
-           (replace-match "❌ Query failed!")
+           (let ((inhibit-read-only t))
+             (goto-char (point-min))
+             (search-forward "⏳ Query running..." nil t)
+             (replace-match "❌ Query failed!"))
            (message "Insights query failed!")))
         
         (t ; Still running
          (cloudwatch-insights-poll-results query-id buffer)))))))
 
-(defun cloudwatch-insights-format-results (results)
-  "Format Insights query results for display."
+(defun cloudwatch-insights-format-results (results query-info)
+  "Format Insights QUERY-INFO and RESULTS for display."
   (if (not results)
       (insert "No results found.\n")
+    ;; Store results for detail view
+    (setq-local cloudwatch-insights-results results)
+    (setq-local cloudwatch-insights-query-info query-info)
+    
     ;; Get field names from first result
     (let ((fields (mapcar (lambda (item) (alist-get 'field item)) (aref results 0))))
       ;; Print header
       (insert (mapconcat (lambda (field) 
-                           (format "%-30s" field))
+                           (format "%-30s" (truncate-string-to-width field 30)))
                          fields " | "))
       (insert "\n")
       (insert (make-string 100 ?─))
       (insert "\n")
-      ;; Print each row
+      ;; Print each row with click handler
       (dotimes (i (length results))
-        (let ((row (aref results i)))
+        (let ((row (aref results i))
+              (start (point)))
           (insert (mapconcat (lambda (item)
                                (let ((value (alist-get 'value item)))
                                  (format "%-30s" 
                                          (truncate-string-to-width 
                                           (or value "")
-                                          30 nil nil t))))
+                                          29 nil nil "…"))))
                              row " | "))
-          (insert "\n"))))))
+          (insert "\n")
+          ;; Add properties to make the row clickable
+          (add-text-properties start (point)
+                               (list 'cloudwatch-row-index i
+                                     'keymap (let ((map (make-sparse-keymap)))
+                                               (define-key map (kbd "RET") 'cloudwatch-insights-show-detail)
+                                               (define-key map (kbd "SPC") 'cloudwatch-insights-show-detail)
+                                               map)
+                                     'help-echo "Press RET to view full record"
+                                     'mouse-face 'highlight))))))
+  
+  (insert "\n" (propertize "Tip: Press RET on any row to view full details" 
+                           'face 'font-lock-comment-face)))
+
+(defun cloudwatch--pad-or-truncate (str width)
+  "Pad STR to WIDTH or truncate with ellipsis if longer."
+  (let ((len (length str)))
+    (cond
+     ((= len width) str)
+     ((< len width) (concat str (make-string (- width len) ?\s)))
+     (t (concat (substring str 0 (- width 1)) "…")))))
+
+(defun cloudwatch-insights-show-detail ()
+  "Show full details for the log entry at point."
+  (interactive)
+  (let ((row-index (get-text-property (point) 'cloudwatch-row-index)))
+    (when row-index
+      (let* ((results cloudwatch-insights-results)  ; Fixed: was let/ should be let*
+             (row (aref results row-index)))
+        (with-current-buffer (get-buffer-create "*CloudWatch Entry Detail*")  ; Fixed: removed errant /
+          (let ((inhibit-read-only t))
+            (erase-buffer)
+            (insert (propertize "═══ CloudWatch Log Entry Detail ═══\n\n" 'face 'bold))
+            
+            ;; Show all fields with full content
+            (mapc (lambda (item)
+                    (let ((field (alist-get 'field item))
+                          (value (alist-get 'value item)))
+                      (insert (propertize (format "%s:\n" field) 
+                                          'face 'font-lock-keyword-face))
+                      ;; Pretty-print JSON if detected
+                      (if (and value
+                               (string-match "^[[:space:]]*[{\\[]" value))
+                          (condition-case nil
+                              (progn
+                                (insert value)
+                                (save-excursion
+                                  (backward-char (length value))
+                                  (json-pretty-print (point) (point-max))))
+                            (error (insert value)))
+                        (insert (or value "null")))
+                      (insert "\n\n")))
+                  row)
+            
+            (goto-char (point-min))
+            (view-mode))
+          (pop-to-buffer (current-buffer)))))))
+
+(define-derived-mode cloudwatch-detail-mode special-mode "CW-Detail"
+  "Mode for viewing CloudWatch log entry details."
+  (setq-local revert-buffer-function
+              (lambda (_ignore-auto _noconfirm)
+                (when (boundp 'cloudwatch-insights-show-detail)
+                  (call-interactively 'cloudwatch-insights-show-detail)))))
 
 (defun cloudwatch-set-insights-query ()
   "Set CloudWatch Insights query from presets or custom."
