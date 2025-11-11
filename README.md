@@ -59,7 +59,8 @@ Advanced SQL-like queries for log analysis:
 *Complex JSON field queries to find exactly what you need*
 
 ### CloudWatch Insights Queries
-![CloudWatch Insights](screenshots/cloudwatch-insights)
+![CloudWatch Insights](screenshots/cloudwatch-insights.png)
+*Advanced filtering with CloudWatch Insights queries*
 
 ## Quick Start
 
