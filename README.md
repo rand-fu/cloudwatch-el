@@ -19,7 +19,7 @@ This started as a collection of functions I wrote for myself that got a little o
 - Favorites management
 - Async operations to keep Emacs responsive 
 
-### 🔍 Two Complementary Query Modes:exclamation: 
+### 🔍 Two Complementary Query Modes 
 
 Because everyone's logs are different.
 
@@ -57,6 +57,9 @@ Advanced SQL-like queries for log analysis:
 ### Advanced Filtering
 ![Filter Example](screenshots/filter-query.png)
 *Complex JSON field queries to find exactly what you need*
+
+### CloudWatch Insights Queries
+![CloudWatch Insights](screenshots/cloudwatch-insights)
 
 ## Quick Start
 

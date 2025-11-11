@@ -395,7 +395,8 @@ Example: \='(\"/aws/containerinsights/prod/application\"
   cloudwatch-log-groups-cache)
 
 (defcustom cloudwatch-query-limit 2500
-  "Maximum number of log events to retrieve in query mode."
+  "Maximum number of log events to retrieve in basic query mode.
+Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
   :type 'integer
   :group 'cloudwatch)
 
