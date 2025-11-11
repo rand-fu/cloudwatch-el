@@ -6,8 +6,8 @@
 ;; Maintainer: Randol Reeves <randol.reeves+emacs@gmail.com>
 ;; Created: November 04, 2025
 ;; Modified: November 04, 2025
-;; Version: 0.1.1
-;; Keywords: tools aws cloudwatch logs emacs doom
+;; Version: 0.2.0
+;; Keywords: tools aws cloudwatch logs monitoring devops kubernetes observability
 ;; Homepage: https://github.com/rand-fu/cloudwatch-el
 ;; Package-Requires: ((emacs "27.1") (cloudwatch "0.1.0"))
 ;;
