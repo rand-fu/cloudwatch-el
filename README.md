@@ -2,21 +2,43 @@
 
 ## Description
 
-Do you love Emacs? Do you have to work with CloudWatch? Do you find CloudWatch's web UI painful? Do you hate leaving Emacs? Why suffer the indignity of context-switching to a clunky web interface when the *One True Editor* can handle your logs with the elegance and power you deserve? 
+Do you love Emacs? Do you have to work with CloudWatch? Do you hate context-switching to a clunky web interface when the *One True Editor* could handle your logs with the elegance and power you deserve?
 
 This package liberates your CloudWatch logs from the AWS console's tyranny, bringing them home where they belong - inside Emacs. 
 
-This started as a collection of functions I wrote for myself that got a little out of hand as I used them more. I thought they should be made into a proper package and shared in case it could help or inspire anyone else on their emacs journey. 
+This started as a collection of functions I wrote for myself that got a little out of hand as I used them more. I thought they should be made into a proper package and shared for my own education and in case it could help inspire anyone else on their emacs journey. 
 
-(This module provides a CloudWatch logs viewer for Emacs with transient interface.)
+(This module provides a CloudWatch logs viewer for Emacs with transient.)
 
-## Features
+## Features Overview
 
 - Interactive log browsing with region support
 - Live tailing and snapshot queries
-- Filter patterns with quick presets
+- Simple filter patterns with quick presets
+- Advanced CloudWatch Insights filters
 - Favorites management
-- Async operations to keep Emacs responsive
+- Async operations to keep Emacs responsive 
+
+### 🔍 Two Complementary Query Modes:exclamation: 
+
+Because everyone's logs are different.
+
+#### Basic Filters (Quick & Live)
+Perfect for real-time troubleshooting and simple pattern matching:
+- **Live tailing** - Watch logs stream in real-time
+- **Simple filters** - Quick text or JSON field matching
+- **Instant results** - No query compilation needed
+
+**Great for:** Debugging active issues, monitoring deployments, watching error streams
+
+#### CloudWatch Insights (Powerful Analytics)
+Advanced SQL-like queries for log analysis:
+- **Aggregations** - Count, sum, avg, percentiles
+- **Time series** - Bin results by time windows
+- **Sorting & limits** - Find top/bottom N results
+- **Field extraction** - Parse and analyze JSON fields
+
+**Great for:** Post-mortem analysis, performance investigations, usage reports, audits, etc
 
 ## Screenshots
 
@@ -35,6 +57,20 @@ This started as a collection of functions I wrote for myself that got a little o
 ### Advanced Filtering
 ![Filter Example](screenshots/filter-query.png)
 *Complex JSON field queries to find exactly what you need*
+
+## Quick Start
+
+``` elisp
+;; Install and configure
+(use-package cloudwatch
+  :custom
+  (cloudwatch-default-region "us-west-2")
+  (cloudwatch-favorite-log-groups 
+    '("/aws/containerinsights/prod/application")))
+
+;; Launch
+M-x cloudwatch RET
+```
 
 ## Prerequisites
 
@@ -68,15 +104,32 @@ This started as a collection of functions I wrote for myself that got a little o
   (load! "cloudwatch-doom" (file-name-directory (locate-library "cloudwatch"))))
 ```
 
-## Configuration
+## Configuration 
+
+### Favorites
+Save frequently accessed log groups:
 
 ```elisp
-;; in ~/.doom.d/config.el
-(setq cloudwatch-default-region "us-west-2"
-      cloudwatch-favorite-log-groups
-     '("/aws/containerinsights/development-eks-cluster/application"
-       "/aws/containerinsights/production-eks-cluster/application"
-        "/your/custom/log-group"))
+(setq cloudwatch-favorite-log-groups
+      '("/aws/containerinsights/prod/application"
+        "/aws/lambda/payment-processor"
+        "/aws/ecs/production"))
+```
+
+### Insights Presets
+Add custom query templates:
+
+```elisp
+(add-to-list 'cloudwatch-insights-presets
+  '("API latency P99" . 
+    "fields @timestamp, duration | stats pct(duration, 99) by bin(5m)"))
+```
+
+### Query Limits
+Adjust default result limits:
+
+```elisp
+(setq cloudwatch-query-limit 5000)  ; For basic queries
 ```
 
 ## Usage
@@ -86,42 +139,92 @@ This started as a collection of functions I wrote for myself that got a little o
 
 ## Transient Commands
 
+### Settings
 - `r` - Change AWS region
-- `L` - Browse all log groups
-- `l` - Select from favorites
-- `t` - Tail logs (live)
-- `Q` - Query logs (snapshot)
-- `1-5` - Quick select favorites
+- `l` - Select log group (favorites + custom)
+- `L` - Browse all log groups in region
+- `m` - Set minutes to look back
+- `M` - Set query result limit
+- `f` - Set filter pattern
+- `R` - Refresh log groups cache
 
-## Filter Patterns
+### Quick Filters
+- `E` - Filter errors only
+- `W` - Filter warnings
+- `5` - Filter 5xx errors
+- `n` - Filter by Kubernetes namespace
+- `p` - Filter by pod name
+- `c` - Clear all filters
 
-Filter patterns are powerful but can be confusing. Filters will also vary depending on your own logs and format. Here are some basic examples to get you started.
+### CloudWatch Insights
+- `i` - Set/select Insights query (presets + custom)
+- `I` - Execute Insights query
 
-### Simple Text Filters
-```bash
-ERROR                     # Find all ERROR messages
-"user-123"               # Find specific user ID
-Exception                # Find exceptions
-"POST /api"              # Find specific API calls
+### Favorites
+- `1-5` - Quick select from favorite log groups
+
+### Actions
+- `t` - Tail logs (live streaming with filters)
+- `Q` - Query logs (snapshot with filters)
+- `q` - Quit transient menu
+
+### In Results Buffers
+- `RET` - View full log entry detail (Insights results)
+- `SPC` - View full log entry detail (alternative)
+- `g` - Rerun query/refresh results
+- `+` - Increase query limit and rerun
+- `-` - Decrease query limit and rerun
+- `q` - Close buffer
+
+## Usage Examples
+
+### Basic Filtering
+
+```elisp
+;; Quick error search
+M-x cloudwatch RET
+E                         ; Filter for ERROR
+t                         ; Start tailing
+
+;; Pod-specific logs
+M-x cloudwatch RET
+p                         ; Set pod filter
+my-app-pod-*             ; Use wildcards!
+Q                         ; Query snapshot
 ```
 
-### JSON Field Filters (for structured logs)
-```bash
-{ $.level = "ERROR" }                           # Error level logs
-{ $.statusCode >= 500 }                         # 5xx errors
-{ $.duration > 1000 }                           # Slow requests (>1s)
-{ $.kubernetes.namespace_name = "production" }  # K8s namespace
-{ $.kubernetes.pod_name = *api* }               # Pod name containing "api"
-{ $.kubernetes.pod_name = nginx-* }             # Pod name starting with "nginx-"
+### CloudWatch Insights Queries
+
+```elisp
+;; Analyze error patterns
+M-x cloudwatch RET
+i                         ; Set Insights query
+"Errors by count"         ; Select from presets
+I                         ; Run query
+
+;; Custom analysis
+M-x cloudwatch RET
+i                         ; Set Insights query
+"Custom query"            ; Choose custom
+fields @timestamp, @message | filter @message like /timeout/ | stats count() by bin(5m)
+I                         ; Run query
 ```
 
-### Quick Tips
+### Interactive Results
+
+After running an Insights query:
+- **RET** on any row - View full log entry with pretty-printed JSON
+- **g** - Rerun the query
+- **q** - Close results
+
+## Tips & Tricks
+
+- **Combine both modes**: Use Insights to identify problem time ranges, then use filtered tailing to watch those specific issues
+- **Save complex queries**: Add frequently-used Insights queries to your presets
+- **Use the @ptr field**: Reference specific logs in bug reports or for AWS Console cross-reference
 - Use `$.fieldname` for JSON fields
-- Use `*` for wildcards (not `%` like SQL)
-- No `like` operator - use `=` with wildcards instead
-- Combine conditions with `&&` (AND), `||` (OR)
 
-## Leveraging Emacs Power
+### Leveraging Emacs Power
 
 CloudWatch-el follows the Unix philosophy - it's just the pipe that brings data into Emacs. Once your logs are in a buffer, you can use all of Emacs' built-in tools:
 
@@ -133,8 +236,19 @@ CloudWatch-el follows the Unix philosophy - it's just the pipe that brings data 
 - `M-x clone-indirect-buffer` - View multiple filtered versions side-by-side
 - `C-u C-x =` - Inspect characters (useful for debugging encoding issues)
 
-## Optional enhancements for later
+## Troubleshooting
 
-- Support for CloudWatch Insights queries (more powerful than filter patterns)
-- Save filter history between sessions
-- Log stream selection within a log group
+### No log groups appearing
+- Check AWS credentials: `aws sts get-caller-identity`
+- Verify region: Logs might be in a different region
+- Refresh cache: Press `R` in the transient
+
+### Insights queries timing out
+- Reduce time range (use fewer minutes)
+- Add more specific filters to reduce data scanned
+- Check CloudWatch Insights query limits in AWS
+
+### Performance issues with large results
+- Use Insights for aggregations instead of fetching all events
+- Reduce `cloudwatch-query-limit` for basic queries
+- Use time and filter constraints to limit data

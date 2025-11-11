@@ -69,12 +69,26 @@
   :type 'string
   :group 'cloudwatch)
 
-(defvar cloudwatch-current-log-group nil)
-(defvar cloudwatch-current-minutes 5)
-(defvar cloudwatch-current-filter "")
-(defvar cloudwatch-current-region cloudwatch-default-region)
-(defvar cloudwatch-log-groups-cache nil)
-(defvar cloudwatch-cache-time nil)
+(defvar cloudwatch-current-log-group nil
+  "Currently selected CloudWatch log group.")
+
+(defvar cloudwatch-current-minutes 5
+  "Number of minutes to look back when querying or tailing logs.")
+
+(defvar cloudwatch-current-filter ""
+  "Current filter pattern for log queries.
+Can be a simple text pattern or CloudWatch JSON filter syntax.")
+
+(defvar cloudwatch-current-region cloudwatch-default-region
+  "Currently active AWS region for CloudWatch operations.")
+
+(defvar cloudwatch-log-groups-cache nil
+  "Cached list of log groups for the current region.
+Automatically refreshed when region changes or cache expires.")
+
+(defvar cloudwatch-cache-time nil
+  "Timestamp when log groups cache was last updated.
+Used to determine if cache needs refresh (10 minute expiry).")
 
 (defvar cloudwatch-insights-query nil
   "Current CloudWatch Insights query string.")
@@ -82,6 +96,7 @@
 (defvar cloudwatch-insights-history nil
   "History of CloudWatch Insights queries.")
 
+;; These are generalized examples, usefulness depends on users log format and needs
 (defcustom cloudwatch-insights-presets
   '(("Top 10 slowest requests" . "fields @timestamp, @message | filter duration > 0 | sort duration desc | limit 10")
     ("Errors by count" . "fields @message | filter @message like /ERROR/ | stats count() by bin(5m)")
@@ -538,6 +553,7 @@ Example: \='(\"/aws/containerinsights/prod/application\"
                                        (truncate-string-to-width cloudwatch-current-filter 40)))))
     ("R" "Refresh cache" cloudwatch-refresh-cache)]]
   ["Quick Filters"
+   :description "Simple pattern matching for live tailing and quick searches"
    [("E" "Errors only" (lambda () (interactive) (setq cloudwatch-current-filter "ERROR") (cloudwatch-transient)))
     ("W" "Warnings" (lambda () (interactive) (setq cloudwatch-current-filter "WARN") (cloudwatch-transient)))
     ("5" "5xx errors" (lambda () (interactive) (setq cloudwatch-current-filter "{ $.statusCode >= 500 }") (cloudwatch-transient)))]
@@ -545,6 +561,7 @@ Example: \='(\"/aws/containerinsights/prod/application\"
     ("p" "Pod name" cloudwatch-set-pod-filter)
     ("c" "Clear filter" (lambda () (interactive) (setq cloudwatch-current-filter "") (cloudwatch-transient)))]]
   ["CloudWatch Insights"
+   :description "Advanced queries for aggregations, stats, and complex analysis"
    [("i" "Set Insights query" cloudwatch-set-insights-query
      :description (lambda ()
                     (if cloudwatch-insights-query
@@ -555,8 +572,8 @@ Example: \='(\"/aws/containerinsights/prod/application\"
    :class transient-column
    :setup-children cloudwatch-favorites-setup]
   ["Actions"
-   [("t" "Start Tailing (live)" cloudwatch-do-tail :transient nil)
-    ("Q" "Query logs (snapshot)" cloudwatch-do-query :transient nil)
+   [("t" "Tail: Live streaming logs with filters" cloudwatch-do-tail :transient nil)
+    ("Q" "Query: Snapshot search with filters" cloudwatch-do-query :transient nil)
     ("q" "Quit" transient-quit-one)]])
 
 (defun cloudwatch-set-query-limit ()
