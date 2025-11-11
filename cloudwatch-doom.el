@@ -7,7 +7,7 @@
 ;; Created: November 04, 2025
 ;; Modified: November 04, 2025
 ;; Version: 0.1.1
-;; Keywords: tools aws cloud logs
+;; Keywords: tools aws cloudwatch logs emacs doom
 ;; Homepage: https://github.com/rand-fu/cloudwatch-el
 ;; Package-Requires: ((emacs "27.1") (cloudwatch "0.1.0"))
 ;;

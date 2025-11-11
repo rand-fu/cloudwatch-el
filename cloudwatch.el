@@ -7,7 +7,7 @@
 ;; Created: November 04, 2025
 ;; Modified: November 04, 2025
 ;; Version: 0.1.1
-;; Keywords: tools aws cloud logs
+;; Keywords: tools aws cloudwatch logs emacs doom
 ;; Homepage: https://github.com/rand-fu/cloudwatch-el
 ;; Package-Requires: ((emacs "27.1") (transient "0.3.0"))
 ;;
@@ -188,7 +188,7 @@
              (replace-match "❌ Query failed!"))
            (message "Insights query failed!")))
         
-        (t ; Still running
+        (t ; Still running?
          (cloudwatch-insights-poll-results query-id buffer)))))))
 
 (defun cloudwatch-insights-format-results (results query-info)
@@ -201,36 +201,57 @@
     
     ;; Get field names from first result
     (let ((fields (mapcar (lambda (item) (alist-get 'field item)) (aref results 0))))
-      ;; Print header
-      (insert (mapconcat (lambda (field) 
-                           (format "%-30s" (truncate-string-to-width field 30)))
-                         fields " | "))
-      (insert "\n")
-      (insert (make-string 100 ?─))
-      (insert "\n")
-      ;; Print each row with click handler
-      (dotimes (i (length results))
-        (let ((row (aref results i))
-              (start (point)))
-          (insert (mapconcat (lambda (item)
-                               (let ((value (alist-get 'value item)))
-                                 (format "%-30s" 
-                                         (truncate-string-to-width 
-                                          (or value "")
-                                          29 nil nil "…"))))
-                             row " | "))
-          (insert "\n")
-          ;; Add properties to make the row clickable
-          (add-text-properties start (point)
-                               (list 'cloudwatch-row-index i
-                                     'keymap (let ((map (make-sparse-keymap)))
-                                               (define-key map (kbd "RET") 'cloudwatch-insights-show-detail)
-                                               (define-key map (kbd "SPC") 'cloudwatch-insights-show-detail)
-                                               map)
-                                     'help-echo "Press RET to view full record"
-                                     'mouse-face 'highlight))))))
+      ;; Define column widths based on field names
+      ;; TODO: this needs some finess. I think it largely depends on your log format. Maybe make it configrable by the user with vars.
+      (let ((field-widths (mapcar (lambda (field)
+                                    (cond
+                                     ;; Give more space to log/message fields
+                                     ((member field '("log" "@message" "message")) 100)
+                                     ;; Medium space for these
+                                     ((member field '("@logStream")) 50)
+                                     ;; Timestamp gets specific width
+                                     ((member field '("@timestamp")) 30)
+                                     ;; Pointer/ID fields can be smaller
+                                     ((member field '("@ptr" "@id" "@requestId")) 15)
+                                     ;; Default for everything else
+                                     (t 25)))
+                                  fields)))
+        ;; Print header
+        (insert (mapconcat (lambda (pair)
+                             (let ((field (car pair))
+                                   (width (cdr pair)))
+                               (format (format "%%-%ds" width)
+                                       (truncate-string-to-width field width nil nil "…"))))
+                           (cl-mapcar #'cons fields field-widths) " | "))
+        (insert "\n")
+        (insert (make-string (+ (apply #'+ field-widths)
+                                (* (1- (length fields)) 3)) ?─))
+        (insert "\n")
+        ;; Print each row with click handler
+        (dotimes (i (length results))
+          (let ((row (aref results i))
+                (start (point)))
+            (insert (mapconcat (lambda (pair)
+                                 (let* ((item (car pair))
+                                        (width (cdr pair))
+                                        (value (alist-get 'value item)))
+                                   (format (format "%%-%ds" width)
+                                           (truncate-string-to-width
+                                            (or value "")
+                                            (1- width) nil nil "…"))))
+                               (cl-mapcar #'cons row field-widths) " | "))
+            (insert "\n")
+            ;; We want some clickyness - add properties to make the row clickable
+            (add-text-properties start (point)
+                                 (list 'cloudwatch-row-index i
+                                       'keymap (let ((map (make-sparse-keymap)))
+                                                 (define-key map (kbd "RET") 'cloudwatch-insights-show-detail)
+                                                 (define-key map (kbd "SPC") 'cloudwatch-insights-show-detail)
+                                                 map)
+                                       'help-echo "Press RET to view full record"
+                                       'mouse-face 'highlight)))))))
   
-  (insert "\n" (propertize "Tip: Press RET on any row to view full details" 
+  (insert "\n" (propertize "Tip: Press RET on any row to view full details"
                            'face 'font-lock-comment-face)))
 
 (defun cloudwatch--pad-or-truncate (str width)
@@ -246,9 +267,9 @@
   (interactive)
   (let ((row-index (get-text-property (point) 'cloudwatch-row-index)))
     (when row-index
-      (let* ((results cloudwatch-insights-results)  ; Fixed: was let/ should be let*
+      (let* ((results cloudwatch-insights-results)
              (row (aref results row-index)))
-        (with-current-buffer (get-buffer-create "*CloudWatch Entry Detail*")  ; Fixed: removed errant /
+        (with-current-buffer (get-buffer-create "*CloudWatch Entry Detail*")
           (let ((inhibit-read-only t))
             (erase-buffer)
             (insert (propertize "═══ CloudWatch Log Entry Detail ═══\n\n" 'face 'bold))
@@ -257,7 +278,7 @@
             (mapc (lambda (item)
                     (let ((field (alist-get 'field item))
                           (value (alist-get 'value item)))
-                      (insert (propertize (format "%s:\n" field) 
+                      (insert (propertize (format "%s:\n" field)
                                           'face 'font-lock-keyword-face))
                       ;; Pretty-print JSON if detected
                       (if (and value
@@ -287,7 +308,7 @@
 (defun cloudwatch-set-insights-query ()
   "Set CloudWatch Insights query from presets or custom."
   (interactive)
-  (let* ((choices (append 
+  (let* ((choices (append
                    '(("Custom query" . custom))
                    cloudwatch-insights-presets))
          (choice (completing-read "Select Insights query: "
@@ -295,7 +316,7 @@
                                   nil t nil 'cloudwatch-insights-history)))
     (setq cloudwatch-insights-query
           (if (string= choice "Custom query")
-              (read-string "Enter Insights query: " 
+              (read-string "Enter Insights query: "
                            cloudwatch-insights-query
                            'cloudwatch-insights-history)
             (cdr (assoc choice choices)))))
@@ -347,7 +368,7 @@ Example: \='(\"/aws/containerinsights/prod/application\"
   (when (or refresh
             (null cloudwatch-log-groups-cache)
             (null cloudwatch-cache-time)
-            (> (- (float-time) cloudwatch-cache-time) 300)) ; 5 min cache
+            (> (- (float-time) cloudwatch-cache-time) 600)) ; 10 min cache
     (message "Fetching log groups from %s..." cloudwatch-current-region)
     (let* ((cmd (format "aws logs describe-log-groups --region %s --query 'logGroups[].logGroupName' --output text"
                         cloudwatch-current-region))
@@ -379,7 +400,7 @@ Example: \='(\"/aws/containerinsights/prod/application\"
                       (* (- (truncate (float-time)) (* cloudwatch-current-minutes 60)) 1000)
                       cloudwatch-query-limit
                       filter-args))
-         ;; Set environment to avoid terminal warnings
+         ;; Set environment to avoid terminal warnings - DUMB
          (process-environment (cons "AWS_PAGER="
                                     (cons "TERM=dumb"
                                           process-environment))))
@@ -463,7 +484,7 @@ Example: \='(\"/aws/containerinsights/prod/application\"
                       cloudwatch-current-region
                       cloudwatch-current-minutes
                       filter-args))
-         ;; Set environment to avoid terminal warnings
+         ;; Set environment to avoid terminal warnings - still DUMB
          (process-environment (cons "AWS_PAGER="
                                     (cons "TERM=dumb"
                                           process-environment))))
@@ -493,6 +514,7 @@ Example: \='(\"/aws/containerinsights/prod/application\"
   (highlight-regexp "\"[^\"]+\":" 'font-lock-keyword-face)
   (highlight-regexp "[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}" 'font-lock-comment-face))
 
+;; Transient menu magic
 (transient-define-prefix cloudwatch-transient ()
   "CloudWatch Logs Viewer"
   :value '()
