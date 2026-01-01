@@ -54,6 +54,7 @@
 
 (require 'transient)
 (require 'ansi-color)
+(require 'json) ;; for json-pretty-print
 
 (defgroup cloudwatch nil
   "AWS CloudWatch log viewer."
@@ -89,13 +90,19 @@ Used to determine if cache needs refresh (10 minute expiry).")
 (defvar cloudwatch-history nil
   "History of log group selections.")
 
-(defvar cloudwatch-insights-query nil
-  "Current CloudWatch Insights query string.")
-
 (defvar cloudwatch-insights-history nil
   "History of CloudWatch Insights queries.")
 
-;; These are generalized examples, usefulness depends on users log format and needs
+(defvar cloudwatch-insights-query nil
+  "Current CloudWatch Insights query string.")
+
+(defvar-local cloudwatch-insights-query-info nil
+  "Buffer-local storage for Insights query metadata.")
+
+(defvar-local cloudwatch-insights-results nil
+  "Buffer-local storage for Insights query results.")
+
+;; These are generalized examples, usefulness depends on users log format and needs. We can probably improve them for a wider audience.
 (defcustom cloudwatch-insights-presets
   '(("Top 10 slowest requests" . "fields @timestamp, @message | filter duration > 0 | sort duration desc | limit 10")
     ("Errors by count" . "fields @message | filter @message like /ERROR/ | stats count() by bin(5m)")
@@ -176,9 +183,8 @@ If SILENT is non-nil, don't show error messages for expected failures."
   (let* ((buffer-name (format "*CW-Insights:%s:%s*"
                               (cloudwatch-get-region)
                               (car (last (split-string cloudwatch-current-log-group "/") 2))))
-         (query-id nil)
          (output-buffer (get-buffer-create buffer-name)))
-      
+    
     ;; Start the query
     (message "Starting Insights query...")
     (let* ((start-time (* (- (truncate (float-time)) (* cloudwatch-current-minutes 60)) 1000))
@@ -189,23 +195,32 @@ If SILENT is non-nil, don't show error messages for expected failures."
                               start-time
                               end-time
                               cloudwatch-insights-query))
-           (query-id-output (shell-command-to-string start-cmd)))
-      (setq query-id (string-trim query-id-output))
+           ;; Use our error-handling wrapper here
+           (query-id-output (cloudwatch--run-aws-command start-cmd)))
       
-      (with-current-buffer output-buffer
-        (erase-buffer)
-        (insert "═══ CloudWatch Insights Query ═══\n")
-        (insert (format "Log Group: %s\n" cloudwatch-current-log-group))
-        (insert (format "Region: %s\n" (cloudwatch-get-region)))
-        (insert (format "Time Range: Last %d minutes\n" cloudwatch-current-minutes))
-        (insert (format "Query: %s\n" cloudwatch-insights-query))
-        (insert "─────────────────────────────────\n")
-        (insert "⏳ Query running...\n"))
+      ;; Check if we got a valid query ID back
+      (unless query-id-output
+        (user-error "Failed to start Insights query"))
       
-      (switch-to-buffer output-buffer)
-      
-      ;; Poll for results
-      (cloudwatch-insights-poll-results query-id output-buffer))))
+      (let ((query-id (string-trim query-id-output)))
+        (when (string-empty-p query-id)
+          (user-error "Failed to start Insights query - empty response"))
+        
+        (with-current-buffer output-buffer
+          (let ((inhibit-read-only t))
+            (erase-buffer)
+            (insert "═══ CloudWatch Insights Query ═══\n")
+            (insert (format "Log Group: %s\n" cloudwatch-current-log-group))
+            (insert (format "Region: %s\n" (cloudwatch-get-region)))
+            (insert (format "Time Range: Last %d minutes\n" cloudwatch-current-minutes))
+            (insert (format "Query: %s\n" cloudwatch-insights-query))
+            (insert "─────────────────────────────────\n")
+            (insert "⏳ Query running...\n")))
+        
+        (switch-to-buffer output-buffer)
+        
+        ;; Poll for results
+        (cloudwatch-insights-poll-results query-id output-buffer)))))
 
 (defun cloudwatch-do-insights-query-safe ()
   "Execute Insights query, returning to transient on validation errors."
@@ -236,43 +251,59 @@ If SILENT is non-nil, don't show error messages for expected failures."
   (run-with-timer
    1 nil
    (lambda ()
-     (let* ((cmd (format "aws logs get-query-results --query-id %s --region %s --output json"
-                         query-id
-                         (cloudwatch-get-region)))
-            (result (json-parse-string (shell-command-to-string cmd) :object-type 'alist))
-            (status (alist-get 'status result)))
-       (cond
-        ((string= status "Complete")
-         (with-current-buffer buffer
-           (let ((inhibit-read-only t))
-             (save-excursion
-               (goto-char (point-min))
-               (search-forward "⏳ Query running..." nil t)
-               (replace-match "✓ Query complete!"))
-             (goto-char (point-max))
-             (insert "\n")
-             ;; Pass both results and query info
-             (let ((query-info (list :log-group cloudwatch-current-log-group
-                                     :region (cloudwatch-get-region)
-                                     :time-range (format "Last %d minutes" cloudwatch-current-minutes)
-                                     :query cloudwatch-insights-query)))
-               (cloudwatch-insights-format-results (alist-get 'results result) query-info)))
-           (cloudwatch-setup-highlighting)
-           (read-only-mode 1)
-           (local-set-key (kbd "q") 'kill-current-buffer)
-           (local-set-key (kbd "g") 'cloudwatch-rerun-insights)
-           (message "Insights query complete!")))
-        
-        ((string= status "Failed")
-         (with-current-buffer buffer
-           (let ((inhibit-read-only t))
-             (goto-char (point-min))
-             (search-forward "⏳ Query running..." nil t)
-             (replace-match "❌ Query failed!"))
-           (message "Insights query failed!")))
-        
-        (t ; Still running
-         (cloudwatch-insights-poll-results query-id buffer)))))))
+     (condition-case err
+         (let* ((cmd (format "aws logs get-query-results --query-id %s --region %s --output json"
+                             query-id
+                             (cloudwatch-get-region)))
+                (output (cloudwatch--run-aws-command cmd))
+                (result (and output (json-parse-string output :object-type 'alist)))
+                (status (and result (alist-get 'status result))))
+           (cond
+            ((null result)
+             (with-current-buffer buffer
+               (let ((inhibit-read-only t))
+                 (goto-char (point-min))
+                 (when (search-forward "⏳ Query running..." nil t)
+                   (replace-match "Query failed - could not get results"))))
+             (message "Insights query failed"))
+            
+            ((string= status "Complete")
+             (with-current-buffer buffer
+               (let ((inhibit-read-only t))
+                 (save-excursion
+                   (goto-char (point-min))
+                   (search-forward "⏳ Query running..." nil t)
+                   (replace-match "✓ Query complete!"))
+                 (goto-char (point-max))
+                 (insert "\n")
+                 (let ((query-info (list :log-group cloudwatch-current-log-group
+                                         :region (cloudwatch-get-region)
+                                         :time-range (format "Last %d minutes" cloudwatch-current-minutes)
+                                         :query cloudwatch-insights-query)))
+                   (cloudwatch-insights-format-results (alist-get 'results result) query-info)))
+               (cloudwatch-setup-highlighting)
+               (read-only-mode 1)
+               (local-set-key (kbd "q") 'kill-current-buffer)
+               (local-set-key (kbd "g") 'cloudwatch-rerun-insights)
+               (message "Insights query complete!")))
+            
+            ((string= status "Failed")
+             (with-current-buffer buffer
+               (let ((inhibit-read-only t))
+                 (goto-char (point-min))
+                 (when (search-forward "⏳ Query running..." nil t)
+                   (replace-match "Query failed!")))
+               (message "Insights query failed!")))
+            
+            (t ; Still running
+             (cloudwatch-insights-poll-results query-id buffer))))
+       (error
+        (with-current-buffer buffer
+          (let ((inhibit-read-only t))
+            (goto-char (point-min))
+            (when (search-forward "Query running..." nil t)
+              (replace-match (format "Error: %s" (error-message-string err))))))
+        (message "Insights query error: %s" (error-message-string err)))))))
 
 (defun cloudwatch-insights-format-results (results query-info)
   "Format Insights QUERY-INFO and RESULTS for display."
