@@ -59,15 +59,14 @@
   "AWS CloudWatch log viewer."
   :group 'tools)
 
-(defcustom cloudwatch-aws-region "us-west-2"
-  "AWS region for CloudWatch."
-  :type 'string
-  :group 'cloudwatch)
-
 (defcustom cloudwatch-default-region "us-west-2"
   "Default AWS region for CloudWatch logs."
   :type 'string
   :group 'cloudwatch)
+
+(defvar cloudwatch-current-region nil
+  "Currently active AWS region for CloudWatch operations.
+Initialized lazily from `cloudwatch-default-region'.")
 
 (defvar cloudwatch-current-log-group nil
   "Currently selected CloudWatch log group.")
@@ -79,9 +78,6 @@
   "Current filter pattern for log queries.
 Can be a simple text pattern or CloudWatch JSON filter syntax.")
 
-(defvar cloudwatch-current-region cloudwatch-default-region
-  "Currently active AWS region for CloudWatch operations.")
-
 (defvar cloudwatch-log-groups-cache nil
   "Cached list of log groups for the current region.
 Automatically refreshed when region changes or cache expires.")
@@ -89,6 +85,9 @@ Automatically refreshed when region changes or cache expires.")
 (defvar cloudwatch-cache-time nil
   "Timestamp when log groups cache was last updated.
 Used to determine if cache needs refresh (10 minute expiry).")
+
+(defvar cloudwatch-history nil
+  "History of log group selections.")
 
 (defvar cloudwatch-insights-query nil
   "Current CloudWatch Insights query string.")
@@ -109,6 +108,49 @@ Used to determine if cache needs refresh (10 minute expiry).")
   :type '(alist :key-type string :value-type string)
   :group 'cloudwatch)
 
+(defun cloudwatch-get-region ()
+  "Get current region, initializing from default if needed."
+  (or cloudwatch-current-region
+      (setq cloudwatch-current-region cloudwatch-default-region)))
+
+(defun cloudwatch-set-region ()
+  "Set AWS region."
+  (interactive)
+  (setq cloudwatch-current-region
+        (completing-read "AWS Region: "
+                         '("us-west-1" "us-west-2" "us-east-1" "us-east-2"
+                           "eu-west-1" "eu-central-1" "ap-southeast-1" "ap-northeast-1")
+                         nil nil (cloudwatch-get-region)))
+  ;; Clear cache when region changes
+  (setq cloudwatch-log-groups-cache nil)
+  (cloudwatch-transient))
+
+;;; Error handling - this could be too restrictive let's test to be sure.
+(defun cloudwatch--run-aws-command (cmd &optional silent)
+  "Run AWS CLI CMD and return output, handling errors gracefully.
+If SILENT is non-nil, don't show error messages for expected failures."
+  (let ((output (shell-command-to-string (concat cmd " 2>&1"))))
+    (cond
+     ((string-match "Unable to locate credentials" output)
+      (user-error "AWS credentials not configured. Run 'aws configure' or set environment variables"))
+     ((string-match "ExpiredToken" output)
+      (user-error "AWS session token expired. Please refresh your credentials"))
+     ((string-match "AccessDenied\\|UnauthorizedAccess" output)
+      (user-error "Access denied. Check your IAM permissions for CloudWatch Logs"))
+     ((string-match "ResourceNotFoundException" output)
+      (unless silent
+        (user-error "Log group not found: %s" cloudwatch-current-log-group))
+      nil)
+     ((string-match "InvalidParameterException\\|ValidationException" output)
+      (user-error "Invalid query or parameters: %s"
+                  (if (string-match "message.*?:\\s-*\\([^\n]+\\)" output)
+                      (match-string 1 output)
+                    output)))
+     ((string-match "ThrottlingException\\|LimitExceededException" output)
+      (user-error "AWS rate limit exceeded. Please wait and try again"))
+     ;; Success - return the output
+     (t output))))
+
 (defun cloudwatch-do-insights-query ()
   "Execute CloudWatch Insights query."
   (interactive)
@@ -118,18 +160,18 @@ Used to determine if cache needs refresh (10 minute expiry).")
     (user-error "Please set an Insights query first"))
   
   (let* ((buffer-name (format "*CW-Insights:%s:%s*"
-                              cloudwatch-current-region
+                              (cloudwatch-get-region)
                               (car (last (split-string cloudwatch-current-log-group "/") 2))))
          (query-id nil)
          (output-buffer (get-buffer-create buffer-name)))
-    
+      
     ;; Start the query
     (message "Starting Insights query...")
     (let* ((start-time (* (- (truncate (float-time)) (* cloudwatch-current-minutes 60)) 1000))
            (end-time (* (truncate (float-time)) 1000))
            (start-cmd (format "aws logs start-query --log-group-name '%s' --region %s --start-time %d --end-time %d --query-string '%s' --output text"
                               cloudwatch-current-log-group
-                              cloudwatch-current-region
+                              (cloudwatch-get-region)
                               start-time
                               end-time
                               cloudwatch-insights-query))
@@ -140,7 +182,7 @@ Used to determine if cache needs refresh (10 minute expiry).")
         (erase-buffer)
         (insert "═══ CloudWatch Insights Query ═══\n")
         (insert (format "Log Group: %s\n" cloudwatch-current-log-group))
-        (insert (format "Region: %s\n" cloudwatch-current-region))
+        (insert (format "Region: %s\n" (cloudwatch-get-region)))
         (insert (format "Time Range: Last %d minutes\n" cloudwatch-current-minutes))
         (insert (format "Query: %s\n" cloudwatch-insights-query))
         (insert "─────────────────────────────────\n")
@@ -172,7 +214,7 @@ Used to determine if cache needs refresh (10 minute expiry).")
    (lambda ()
      (let* ((cmd (format "aws logs get-query-results --query-id %s --region %s --output json"
                          query-id
-                         cloudwatch-current-region))
+                         (cloudwatch-get-region)))
             (result (json-parse-string (shell-command-to-string cmd) :object-type 'alist))
             (status (alist-get 'status result)))
        (cond
@@ -183,9 +225,11 @@ Used to determine if cache needs refresh (10 minute expiry).")
                (goto-char (point-min))
                (search-forward "⏳ Query running..." nil t)
                (replace-match "✓ Query complete!"))
+             (goto-char (point-max))
+             (insert "\n")
              ;; Pass both results and query info
              (let ((query-info (list :log-group cloudwatch-current-log-group
-                                     :region cloudwatch-current-region
+                                     :region (cloudwatch-get-region)
                                      :time-range (format "Last %d minutes" cloudwatch-current-minutes)
                                      :query cloudwatch-insights-query)))
                (cloudwatch-insights-format-results (alist-get 'results result) query-info)))
@@ -203,7 +247,7 @@ Used to determine if cache needs refresh (10 minute expiry).")
              (replace-match "❌ Query failed!"))
            (message "Insights query failed!")))
         
-        (t ; Still running?
+        (t ; Still running
          (cloudwatch-insights-poll-results query-id buffer)))))))
 
 (defun cloudwatch-insights-format-results (results query-info)
@@ -349,6 +393,37 @@ Example: \='(\"/aws/containerinsights/prod/application\"
   :type '(repeat string)
   :group 'cloudwatch)
 
+(defun cloudwatch-add-to-favorites (log-group)
+  "Add LOG-GROUP to favorites, managing duplicates and order."
+  (when (and log-group (not (string-empty-p log-group)))
+    ;; Remove if already exists (to move to front)
+    (setq cloudwatch-favorite-log-groups
+          (delete log-group cloudwatch-favorite-log-groups))
+    ;; Add to front
+    (push log-group cloudwatch-favorite-log-groups)
+    ;; Keep only first 10 (or configurable limit)
+    (when (> (length cloudwatch-favorite-log-groups) 10)
+      (setcdr (nthcdr 9 cloudwatch-favorite-log-groups) nil))
+    ;; Save
+    (customize-save-variable 'cloudwatch-favorite-log-groups
+                             cloudwatch-favorite-log-groups)
+    (message "Added to favorites: %s" (truncate-string-to-width log-group 50))))
+
+(defun cloudwatch-remove-from-favorites ()
+  "Remove a log group from favorites."
+  (interactive)
+  (if (null cloudwatch-favorite-log-groups)
+      (message "No favorites to remove")
+    (let ((to-remove (completing-read "Remove from favorites: "
+                                      cloudwatch-favorite-log-groups
+                                      nil t)))
+      (setq cloudwatch-favorite-log-groups
+            (delete to-remove cloudwatch-favorite-log-groups))
+      (customize-save-variable 'cloudwatch-favorite-log-groups
+                               cloudwatch-favorite-log-groups)
+      (message "Removed: %s" to-remove)))
+  (cloudwatch-transient))
+
 (defun cloudwatch-check-aws-cli ()
   "Check if AWS CLI is installed and configured."
   (unless (executable-find "aws")
@@ -364,18 +439,18 @@ Example: \='(\"/aws/containerinsights/prod/application\"
      ((string-match "/aws/containerinsights/\\([^/]+\\)/\\([^/]+\\)" log-group)
       (format "*%s:%s:%s-%s*"
               prefix
-              cloudwatch-current-region
+              (cloudwatch-get-region)
               (match-string 1 log-group)
               (match-string 2 log-group)))
      ((string-match "/aws/lambda/\\([^/]+\\)" log-group)
       (format "*%s:%s:lambda-%s*"
               prefix
-              cloudwatch-current-region
+              (cloudwatch-get-region)
               (match-string 1 log-group)))
      (t (let ((parts (split-string log-group "/")))
           (format "*%s:%s:%s*"
                   prefix
-                  cloudwatch-current-region
+                  (cloudwatch-get-region)
                   (string-join (last parts 2) "-")))))))
 
 (defun cloudwatch-list-log-groups (&optional refresh)
@@ -383,15 +458,19 @@ Example: \='(\"/aws/containerinsights/prod/application\"
   (when (or refresh
             (null cloudwatch-log-groups-cache)
             (null cloudwatch-cache-time)
-            (> (- (float-time) cloudwatch-cache-time) 600)) ; 10 min cache
-    (message "Fetching log groups from %s..." cloudwatch-current-region)
+            (> (- (float-time) cloudwatch-cache-time) 600))
+    (message "Fetching log groups from %s..." (cloudwatch-get-region))
     (let* ((cmd (format "aws logs describe-log-groups --region %s --query 'logGroups[].logGroupName' --output text"
-                        cloudwatch-current-region))
-           (output (shell-command-to-string cmd)))
-      (setq cloudwatch-log-groups-cache
-            (split-string output "\t\\|\n" t))
-      (setq cloudwatch-cache-time (float-time))
-      (message "Found %d log groups" (length cloudwatch-log-groups-cache))))
+                        (cloudwatch-get-region)))
+           (output (cloudwatch--run-aws-command cmd)))
+      (if (and output (not (string-empty-p (string-trim output))))
+          (progn
+            (setq cloudwatch-log-groups-cache
+                  (split-string output "\t\\|\n" t))
+            (setq cloudwatch-cache-time (float-time))
+            (message "Found %d log groups" (length cloudwatch-log-groups-cache)))
+        (setq cloudwatch-log-groups-cache nil)
+        (message "No log groups found or error occurred"))))
   cloudwatch-log-groups-cache)
 
 (defcustom cloudwatch-query-limit 2500
@@ -412,11 +491,10 @@ Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
                         ""))
          (cmd (format "aws logs filter-log-events --log-group-name '%s' --region %s --start-time %d --limit %d --output text%s"
                       cloudwatch-current-log-group
-                      cloudwatch-current-region
+                      (cloudwatch-get-region)
                       (* (- (truncate (float-time)) (* cloudwatch-current-minutes 60)) 1000)
                       cloudwatch-query-limit
                       filter-args))
-         ;; Set environment to avoid terminal warnings - DUMB
          (process-environment (cons "AWS_PAGER="
                                     (cons "TERM=dumb"
                                           process-environment))))
@@ -427,9 +505,9 @@ Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
         (erase-buffer)
         (insert (format "Querying: %s\nRegion: %s\nTime range: Last %d minutes\nLimit: %d events\n"
                         cloudwatch-current-log-group
-                        cloudwatch-current-region
+                        (cloudwatch-get-region)
                         cloudwatch-current-minutes
-                        cloudwatch-query-limit))  ; Show limit in header
+                        cloudwatch-query-limit))
         (when (not (string-empty-p cloudwatch-current-filter))
           (insert (format "Filter: %s\n" cloudwatch-current-filter)))
         (insert "─────────────────────────────────────────────────\n")
@@ -438,8 +516,8 @@ Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
         (toggle-truncate-lines 1)
         (local-set-key (kbd "q") 'kill-current-buffer)
         (local-set-key (kbd "g") 'cloudwatch-requery)
-        (local-set-key (kbd "+" ) 'cloudwatch-increase-limit)
-        (local-set-key (kbd "-" ) 'cloudwatch-decrease-limit))
+        (local-set-key (kbd "+") 'cloudwatch-increase-limit)
+        (local-set-key (kbd "-") 'cloudwatch-decrease-limit))
       (switch-to-buffer output-buffer)
       ;; Run async
       (let ((proc (start-process-shell-command
@@ -451,7 +529,6 @@ Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
          (lambda (process event)
            (when (string-match-p "finished\\|exited" event)
              (with-current-buffer (process-buffer process)
-               ;; Clean up output
                (save-excursion
                  (goto-char (point-min))
                  (when (search-forward "⏳ Loading logs..." nil t)
@@ -463,7 +540,7 @@ Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
                  ;; Check if we hit the limit
                  (goto-char (point-max))
                  (let ((line-count (count-lines (point-min) (point-max))))
-                   (when (>= line-count (+ cloudwatch-query-limit 5)) ; +5 for header lines
+                   (when (>= line-count (+ cloudwatch-query-limit 5))
                      (goto-char (point-max))
                      (insert "\n⚠️  Result limit reached. Press '+' to increase limit and requery.")))
                  (goto-char (point-min)))
@@ -497,10 +574,9 @@ Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
                         ""))
          (cmd (format "aws logs tail '%s' --region %s --since %dm --follow --format short%s"
                       cloudwatch-current-log-group
-                      cloudwatch-current-region
+                      (cloudwatch-get-region)
                       cloudwatch-current-minutes
                       filter-args))
-         ;; Set environment to avoid terminal warnings - still DUMB
          (process-environment (cons "AWS_PAGER="
                                     (cons "TERM=dumb"
                                           process-environment))))
@@ -536,7 +612,7 @@ Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
   :value '()
   ["CloudWatch Settings"
    [("r" "Region" cloudwatch-set-region
-     :description (lambda () (format "Region: %s" cloudwatch-current-region)))
+     :description (lambda () (format "Region: %s" (cloudwatch-get-region))))
     ("l" "Log Group" cloudwatch-set-log-group
      :description (lambda () (format "Log Group: %s"
                                      (or (and cloudwatch-current-log-group
@@ -572,6 +648,19 @@ Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
   ["Favorites"
    :class transient-column
    :setup-children cloudwatch-favorites-setup]
+  ["Favorites Management"
+   ("a" "Add current to favorites"
+    (lambda () (interactive)
+      (if cloudwatch-current-log-group
+          (cloudwatch-add-to-favorites cloudwatch-current-log-group)
+        (message "No log group selected"))))
+   ("d" "Remove from favorites" cloudwatch-remove-from-favorites)
+   ("C" "Clear all favorites"
+    (lambda () (interactive)
+      (when (yes-or-no-p "Clear all favorites? ")
+        (setq cloudwatch-favorite-log-groups nil)
+        (customize-save-variable 'cloudwatch-favorite-log-groups nil)
+        (message "Favorites cleared"))))]
   ["Actions"
    [("t" "Tail: Live streaming logs with filters" cloudwatch-do-tail :transient nil)
     ("Q" "Query: Snapshot search with filters" cloudwatch-do-query :transient nil)
@@ -599,18 +688,6 @@ Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
     ;; Show helpful message when no favorites
     (list (list "!" "No favorites yet" 'ignore))))
 
-(defun cloudwatch-set-region ()
-  "Set AWS region."
-  (interactive)
-  (setq cloudwatch-current-region
-        (completing-read "AWS Region: "
-                         '("us-west-1" "us-west-2" "us-east-1" "us-east-2"
-                           "eu-west-1" "eu-central-1" "ap-southeast-1" "ap-northeast-1")
-                         nil nil cloudwatch-current-region))
-  ;; Clear cache when region changes
-  (setq cloudwatch-log-groups-cache nil)
-  (cloudwatch-transient))
-
 (defun cloudwatch-set-log-group ()
   "Set the log group from favorites or type custom."
   (interactive)
@@ -624,17 +701,16 @@ Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
   "Browse and select from all log groups in region."
   (interactive)
   (let ((log-groups (cloudwatch-list-log-groups)))
+    (unless log-groups
+      (user-error "No log groups found in region %s" (cloudwatch-get-region)))
     (setq cloudwatch-current-log-group
           (completing-read (format "Select log group (%d available): " (length log-groups))
                            log-groups
                            nil t nil 'cloudwatch-history))
     ;; Offer to add to favorites
     (when (and cloudwatch-current-log-group
-               (not (member cloudwatch-current-log-group cloudwatch-favorite-log-groups))
                (y-or-n-p "Add to favorites? "))
-      (customize-save-variable 'cloudwatch-favorite-log-groups
-                               (append cloudwatch-favorite-log-groups
-                                       (list cloudwatch-current-log-group)))))
+      (cloudwatch-add-to-favorites cloudwatch-current-log-group)))
   (cloudwatch-transient))
 
 (defun cloudwatch-refresh-cache ()
@@ -659,7 +735,7 @@ Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
   (cloudwatch-transient))
 
 (defun cloudwatch-set-namespace-filter ()
-  "Set namespace filter."
+  "Set Kubernetes namespace filter."
   (interactive)
   (let ((namespace (read-string "Namespace: ")))
     (setq cloudwatch-current-filter
@@ -667,17 +743,24 @@ Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
   (cloudwatch-transient))
 
 (defun cloudwatch-set-pod-filter ()
-  "Set pod name filter."
+  "Set pod name filter with match type selection."
   (interactive)
-  (let ((pod (read-string "Pod name (supports * wildcards): ")))
+  (let* ((pod (read-string "Pod name: "))
+         (match-type (completing-read "Match type: "
+                                      '("contains" "exact" "starts-with") 
+                                      nil t nil nil "contains")))
     (setq cloudwatch-current-filter
-          (format "{ $.kubernetes.pod_name = *%s* }" pod)))
+          (pcase match-type
+            ("exact" (format "{ $.kubernetes.pod_name = \"%s\" }" pod))
+            ("contains" (format "{ $.kubernetes.pod_name = \"*%s*\" }" pod))
+            ("starts-with" (format "{ $.kubernetes.pod_name = \"%s*\" }" pod)))))
   (cloudwatch-transient))
 
 ;;;###autoload
 (defun cloudwatch ()
   "Open CloudWatch logs viewer."
   (interactive)
+  (cloudwatch-check-aws-cli)
   (cloudwatch-transient))
 
 (provide 'cloudwatch)
