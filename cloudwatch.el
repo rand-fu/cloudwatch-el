@@ -108,6 +108,20 @@ Used to determine if cache needs refresh (10 minute expiry).")
   :type '(alist :key-type string :value-type string)
   :group 'cloudwatch)
 
+;;; Because we do care about UX in Emacs!
+(defmacro cloudwatch-with-transient-fallback (&rest body)
+  "Execute BODY, returning to transient menu on user-error or quit.
+This provides a better UX by keeping the transient open when
+validation fails or user cancels, instead of leaving them stranded."
+  `(condition-case err
+       (progn ,@body)
+     (user-error
+      (message "%s" (error-message-string err))
+      (sit-for 1.5)
+      (cloudwatch-transient))
+     (quit
+      (cloudwatch-transient))))
+
 (defun cloudwatch-get-region ()
   "Get current region, initializing from default if needed."
   (or cloudwatch-current-region
@@ -192,6 +206,16 @@ If SILENT is non-nil, don't show error messages for expected failures."
       
       ;; Poll for results
       (cloudwatch-insights-poll-results query-id output-buffer))))
+
+(defun cloudwatch-do-insights-query-safe ()
+  "Execute Insights query, returning to transient on validation errors."
+  (interactive)
+  (cloudwatch-with-transient-fallback
+   (unless cloudwatch-current-log-group
+     (user-error "Please select a log group first"))
+   (unless cloudwatch-insights-query
+     (user-error "Please set an Insights query first"))
+   (cloudwatch-do-insights-query)))
 
 ;; Define a results mode
 (define-derived-mode cloudwatch-results-mode special-mode "CW-Results"
@@ -367,19 +391,20 @@ If SILENT is non-nil, don't show error messages for expected failures."
 (defun cloudwatch-set-insights-query ()
   "Set CloudWatch Insights query from presets or custom."
   (interactive)
-  (let* ((choices (append
-                   '(("Custom query" . custom))
-                   cloudwatch-insights-presets))
-         (choice (completing-read "Select Insights query: "
-                                  (mapcar #'car choices)
-                                  nil t nil 'cloudwatch-insights-history)))
-    (setq cloudwatch-insights-query
-          (if (string= choice "Custom query")
-              (read-string "Enter Insights query: "
-                           cloudwatch-insights-query
-                           'cloudwatch-insights-history)
-            (cdr (assoc choice choices)))))
-  (cloudwatch-transient))
+  (cloudwatch-with-transient-fallback
+   (let* ((choices (append
+                    '(("Custom query" . custom))
+                    cloudwatch-insights-presets))
+          (choice (completing-read "Select Insights query: "
+                                   (mapcar #'car choices)
+                                   nil t nil 'cloudwatch-insights-history)))
+     (setq cloudwatch-insights-query
+           (if (string= choice "Custom query")
+               (read-string "Enter Insights query: "
+                            cloudwatch-insights-query
+                            'cloudwatch-insights-history)
+             (cdr (assoc choice choices)))))
+   (cloudwatch-transient)))
 
 (defun cloudwatch-rerun-insights ()
   "Rerun the last Insights query."
@@ -548,6 +573,14 @@ Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
                (message "Query complete. Press 'g' to refresh, '+/-' to adjust limit, 'q' to quit.")))))
         (message "Querying logs asynchronously (limit: %d)..." cloudwatch-query-limit)))))
 
+(defun cloudwatch-do-query-safe ()
+  "Execute query command, returning to transient on validation errors."
+  (interactive)
+  (cloudwatch-with-transient-fallback
+   (unless cloudwatch-current-log-group
+     (user-error "Please select a log group first"))
+   (cloudwatch-do-query)))
+
 (defun cloudwatch-increase-limit ()
   "Increase query limit and requery."
   (interactive)
@@ -590,6 +623,14 @@ Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
       (toggle-truncate-lines 1)
       (goto-char (point-max))
       (local-set-key (kbd "q") 'kill-current-buffer))))
+
+(defun cloudwatch-do-tail-safe ()
+  "Execute tail command, returning to transient on validation errors."
+  (interactive)
+  (cloudwatch-with-transient-fallback
+   (unless cloudwatch-current-log-group
+     (user-error "Please select a log group first"))
+   (cloudwatch-do-tail)))
 
 (defun cloudwatch-requery ()
   "Rerun the query with same parameters."
@@ -644,7 +685,7 @@ Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
                     (if cloudwatch-insights-query
                         (format "Query: %s" (truncate-string-to-width cloudwatch-insights-query 40))
                       "Query: Not set")))
-    ("I" "Run Insights query" cloudwatch-do-insights-query :transient nil)]]
+    ("I" "Run Insights query" cloudwatch-do-insights-query-safe :transient nil)]]
   ["Favorites"
    :class transient-column
    :setup-children cloudwatch-favorites-setup]
@@ -662,16 +703,17 @@ Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
         (customize-save-variable 'cloudwatch-favorite-log-groups nil)
         (message "Favorites cleared"))))]
   ["Actions"
-   [("t" "Tail: Live streaming logs with filters" cloudwatch-do-tail :transient nil)
-    ("Q" "Query: Snapshot search with filters" cloudwatch-do-query :transient nil)
+   [("t" "Tail: Live streaming logs with filters" cloudwatch-do-tail-safe :transient nil)
+    ("Q" "Query: Snapshot search with filters" cloudwatch-do-query-safe :transient nil)
     ("q" "Quit" transient-quit-one)]])
 
 (defun cloudwatch-set-query-limit ()
   "Set the query result limit."
   (interactive)
-  (setq cloudwatch-query-limit
-        (read-number "Maximum events to retrieve: " cloudwatch-query-limit))
-  (cloudwatch-transient))
+  (cloudwatch-with-transient-fallback
+   (setq cloudwatch-query-limit
+         (read-number "Maximum events to retrieve: " cloudwatch-query-limit))
+   (cloudwatch-transient)))
 
 (defun cloudwatch-favorites-setup (_)
   "Dynamically generate favorite buttons."
@@ -691,27 +733,29 @@ Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
 (defun cloudwatch-set-log-group ()
   "Set the log group from favorites or type custom."
   (interactive)
-  (setq cloudwatch-current-log-group
-        (completing-read "Log group (favorites + custom): "
-                         cloudwatch-favorite-log-groups
-                         nil nil nil 'cloudwatch-history))
-  (cloudwatch-transient))
+  (cloudwatch-with-transient-fallback
+   (setq cloudwatch-current-log-group
+         (completing-read "Log group (favorites + custom): "
+                          cloudwatch-favorite-log-groups
+                          nil nil nil 'cloudwatch-history))
+   (cloudwatch-transient)))
 
 (defun cloudwatch-browse-log-groups ()
   "Browse and select from all log groups in region."
   (interactive)
-  (let ((log-groups (cloudwatch-list-log-groups)))
-    (unless log-groups
-      (user-error "No log groups found in region %s" (cloudwatch-get-region)))
-    (setq cloudwatch-current-log-group
-          (completing-read (format "Select log group (%d available): " (length log-groups))
-                           log-groups
-                           nil t nil 'cloudwatch-history))
-    ;; Offer to add to favorites
-    (when (and cloudwatch-current-log-group
-               (y-or-n-p "Add to favorites? "))
-      (cloudwatch-add-to-favorites cloudwatch-current-log-group)))
-  (cloudwatch-transient))
+  (cloudwatch-with-transient-fallback
+   (let ((log-groups (cloudwatch-list-log-groups)))
+     (unless log-groups
+       (user-error "No log groups found in region %s" (cloudwatch-get-region)))
+     (setq cloudwatch-current-log-group
+           (completing-read (format "Select log group (%d available): " (length log-groups))
+                            log-groups
+                            nil t nil 'cloudwatch-history))
+     ;; Offer to add to favorites
+     (when (and cloudwatch-current-log-group
+                (y-or-n-p "Add to favorites? "))
+       (cloudwatch-add-to-favorites cloudwatch-current-log-group)))
+   (cloudwatch-transient)))
 
 (defun cloudwatch-refresh-cache ()
   "Refresh the log groups cache."
@@ -723,38 +767,42 @@ Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
 (defun cloudwatch-set-minutes ()
   "Set minutes to look back."
   (interactive)
-  (setq cloudwatch-current-minutes
-        (read-number "Minutes back: " cloudwatch-current-minutes))
-  (cloudwatch-transient))
+  (cloudwatch-with-transient-fallback
+   (setq cloudwatch-current-minutes
+         (read-number "Minutes back: " cloudwatch-current-minutes))
+   (cloudwatch-transient)))
 
 (defun cloudwatch-set-filter ()
   "Set filter pattern."
   (interactive)
-  (setq cloudwatch-current-filter
-        (read-string "Filter pattern: " cloudwatch-current-filter))
-  (cloudwatch-transient))
+  (cloudwatch-with-transient-fallback
+   (setq cloudwatch-current-filter
+         (read-string "Filter pattern: " cloudwatch-current-filter))
+   (cloudwatch-transient)))
 
 (defun cloudwatch-set-namespace-filter ()
   "Set Kubernetes namespace filter."
   (interactive)
-  (let ((namespace (read-string "Namespace: ")))
-    (setq cloudwatch-current-filter
-          (format "{ $.kubernetes.namespace_name = \"%s\" }" namespace)))
-  (cloudwatch-transient))
+  (cloudwatch-with-transient-fallback
+   (let ((namespace (read-string "Namespace: ")))
+     (setq cloudwatch-current-filter
+           (format "{ $.kubernetes.namespace_name = \"%s\" }" namespace)))
+   (cloudwatch-transient)))
 
 (defun cloudwatch-set-pod-filter ()
   "Set pod name filter with match type selection."
   (interactive)
-  (let* ((pod (read-string "Pod name: "))
-         (match-type (completing-read "Match type: "
-                                      '("contains" "exact" "starts-with") 
-                                      nil t nil nil "contains")))
-    (setq cloudwatch-current-filter
-          (pcase match-type
-            ("exact" (format "{ $.kubernetes.pod_name = \"%s\" }" pod))
-            ("contains" (format "{ $.kubernetes.pod_name = \"*%s*\" }" pod))
-            ("starts-with" (format "{ $.kubernetes.pod_name = \"%s*\" }" pod)))))
-  (cloudwatch-transient))
+  (cloudwatch-with-transient-fallback
+   (let* ((pod (read-string "Pod name: "))
+          (match-type (completing-read "Match type: "
+                                       '("contains" "exact" "starts-with")
+                                       nil t nil nil "contains")))
+     (setq cloudwatch-current-filter
+           (pcase match-type
+             ("exact" (format "{ $.kubernetes.pod_name = \"%s\" }" pod))
+             ("contains" (format "{ $.kubernetes.pod_name = \"*%s*\" }" pod))
+             ("starts-with" (format "{ $.kubernetes.pod_name = \"%s*\" }" pod)))))
+   (cloudwatch-transient)))
 
 ;;;###autoload
 (defun cloudwatch ()
