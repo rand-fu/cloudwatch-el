@@ -60,11 +60,6 @@
   "AWS CloudWatch log viewer."
   :group 'tools)
 
-(defcustom cloudwatch-default-region "us-west-2"
-  "Default AWS region for CloudWatch logs."
-  :type 'string
-  :group 'cloudwatch)
-
 (defvar cloudwatch-current-region nil
   "Currently active AWS region for CloudWatch operations.
 Initialized lazily from `cloudwatch-default-region'.")
@@ -90,6 +85,9 @@ Used to determine if cache needs refresh (10 minute expiry).")
 (defvar cloudwatch-history nil
   "History of log group selections.")
 
+(defvar cloudwatch-wide-mode nil
+  "When non-nil, double the width of message fields in Insights results.")
+
 (defvar cloudwatch-insights-history nil
   "History of CloudWatch Insights queries.")
 
@@ -101,6 +99,37 @@ Used to determine if cache needs refresh (10 minute expiry).")
 
 (defvar-local cloudwatch-insights-results nil
   "Buffer-local storage for Insights query results.")
+
+(defcustom cloudwatch-default-region "us-west-2"
+  "Default AWS region for CloudWatch logs."
+  :type 'string
+  :group 'cloudwatch)
+
+(defcustom cloudwatch-favorite-log-groups nil
+  "List of frequently used CloudWatch log groups.
+Example: \='(\"/aws/containerinsights/prod/application\"
+           \"/aws/lambda/my-function\")"
+  :type '(repeat string)
+  :group 'cloudwatch)
+
+(defcustom cloudwatch-insights-column-widths
+  '(("@timestamp" . 26)
+    ("@logStream" . 50)
+    ("log" . 100)
+    ("@message" . 100)
+    ("message" . 100)
+    ("kubernetes.pod_name" . 50)
+    ("@ptr" . 15)
+    ("@id" . 15)
+    ("@requestId" . 15)
+    (default . 30))
+  "Column widths for CloudWatch Insights results display.
+Keys are field names, values are character widths.
+The special key `default' sets the width for unlisted fields.
+These are base widths - `cloudwatch-wide-mode' can double message fields."
+  :type '(alist :key-type (choice string (const default))
+          :value-type integer)
+  :group 'cloudwatch)
 
 ;; These are generalized examples, usefulness depends on users log format and needs. We can probably improve them for a wider audience.
 (defcustom cloudwatch-insights-presets
@@ -305,6 +334,27 @@ If SILENT is non-nil, don't show error messages for expected failures."
               (replace-match (format "Error: %s" (error-message-string err))))))
         (message "Insights query error: %s" (error-message-string err)))))))
 
+(defun cloudwatch--get-column-width (field)
+  "Get the display width for FIELD name.
+Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
+  (let ((base-width (or (cdr (assoc field cloudwatch-insights-column-widths))
+                        (cdr (assoc 'default cloudwatch-insights-column-widths))
+                        30)))
+    ;; Double message fields in wide mode
+    (if (and cloudwatch-wide-mode
+             (member field '("log" "@message" "message")))
+        (* base-width 2)
+      base-width)))
+
+(defun cloudwatch-toggle-wide-mode ()
+  "Toggle wide column mode for Insights results."
+  (interactive)
+  (setq cloudwatch-wide-mode (not cloudwatch-wide-mode))
+  (message "Wide mode %s (message fields %s)"
+           (if cloudwatch-wide-mode "enabled" "disabled")
+           (if cloudwatch-wide-mode "doubled" "normal"))
+  (cloudwatch-transient))
+
 (defun cloudwatch-insights-format-results (results query-info)
   "Format Insights QUERY-INFO and RESULTS for display."
   (if (not results)
@@ -315,21 +365,8 @@ If SILENT is non-nil, don't show error messages for expected failures."
     
     ;; Get field names from first result
     (let ((fields (mapcar (lambda (item) (alist-get 'field item)) (aref results 0))))
-      ;; Define column widths based on field names
-      ;; TODO: this needs some finess. I think it largely depends on your log format. Maybe make it configrable by the user with vars.
-      (let ((field-widths (mapcar (lambda (field)
-                                    (cond
-                                     ;; Give more space to log/message fields
-                                     ((member field '("log" "@message" "message")) 100)
-                                     ;; Medium space for these
-                                     ((member field '("@logStream")) 50)
-                                     ;; Timestamp gets specific width
-                                     ((member field '("@timestamp")) 30)
-                                     ;; Pointer/ID fields can be smaller
-                                     ((member field '("@ptr" "@id" "@requestId")) 15)
-                                     ;; Default for everything else
-                                     (t 25)))
-                                  fields)))
+      ;; Get column widths dynamically
+      (let ((field-widths (mapcar #'cloudwatch--get-column-width fields)))
         ;; Print header
         (insert (mapconcat (lambda (pair)
                              (let ((field (car pair))
@@ -355,7 +392,7 @@ If SILENT is non-nil, don't show error messages for expected failures."
                                             (1- width) nil nil "…"))))
                                (cl-mapcar #'cons row field-widths) " | "))
             (insert "\n")
-            ;; We want some clickyness - add properties to make the row clickable
+            ;; Add properties to make the row clickable
             (add-text-properties start (point)
                                  (list 'cloudwatch-row-index i
                                        'keymap (let ((map (make-sparse-keymap)))
@@ -441,13 +478,6 @@ If SILENT is non-nil, don't show error messages for expected failures."
   "Rerun the last Insights query."
   (interactive)
   (cloudwatch-do-insights-query))
-
-(defcustom cloudwatch-favorite-log-groups nil
-  "List of frequently used CloudWatch log groups.
-Example: \='(\"/aws/containerinsights/prod/application\"
-           \"/aws/lambda/my-function\")"
-  :type '(repeat string)
-  :group 'cloudwatch)
 
 (defun cloudwatch-add-to-favorites (log-group)
   "Add LOG-GROUP to favorites, managing duplicates and order."
@@ -700,6 +730,8 @@ Does not affect CloudWatch Insights - use \='limit\=' in the query itself."
                                      (if (string-empty-p cloudwatch-current-filter)
                                          "None"
                                        (truncate-string-to-width cloudwatch-current-filter 40)))))
+    ("w" "Wide mode" cloudwatch-toggle-wide-mode
+     :description (lambda () (format "Wide mode: %s" (if cloudwatch-wide-mode "ON" "OFF"))))
     ("R" "Refresh cache" cloudwatch-refresh-cache)]]
   ["Quick Filters"
    :description "Simple pattern matching for live tailing and quick searches"
