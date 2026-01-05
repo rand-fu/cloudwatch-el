@@ -290,8 +290,8 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
           (delete log-group cloudwatch-favorite-log-groups))
     ;; Add to front
     (push log-group cloudwatch-favorite-log-groups)
-    ;; Keep only first 10 (or configurable limit)
-    (when (> (length cloudwatch-favorite-log-groups) 10)
+    ;; Keep only first 5 (or configurable limit)
+    (when (> (length cloudwatch-favorite-log-groups) 5)
       (setcdr (nthcdr 9 cloudwatch-favorite-log-groups) nil))
     ;; Save
     (customize-save-variable 'cloudwatch-favorite-log-groups
@@ -449,7 +449,7 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
           (insert (format "Filter: %s\n" cloudwatch-current-filter)))
         (insert "─────────────────────────────────────────────────\n")
         (insert "⏳ Loading logs...\n")
-        (cloudwatch--setup-highlighting)
+        ;; (cloudwatch--setup-highlighting)
         (toggle-truncate-lines 1)
         (local-set-key (kbd "q") 'kill-current-buffer)
         (local-set-key (kbd "g") 'cloudwatch-requery)
@@ -481,6 +481,7 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
                      (goto-char (point-max))
                      (insert "\n⚠️  Result limit reached. Press '+' to increase limit and requery.")))
                  (goto-char (point-min)))
+               (cloudwatch--setup-highlighting)
                (read-only-mode 1)
                (message "Query complete. Press 'g' to refresh, '+/-' to adjust limit, 'q' to quit.")))))
         (message "Querying logs asynchronously (limit: %d)..." cloudwatch-query-limit)))))
@@ -683,8 +684,9 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
 
 (defun cloudwatch-insights-format-results (results query-info)
   "Format Insights QUERY-INFO and RESULTS for display."
-  (if (not results)
-      (insert "No results found.\n")
+  (if (or (not results)
+          (seq-empty-p results))
+      (insert (propertize "No results found.\n" 'face 'font-lock-comment-face))
     ;; Store results for detail view
     (setq-local cloudwatch-insights-results results)
     (setq-local cloudwatch-insights-query-info query-info)
@@ -808,7 +810,7 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
    :description "Simple pattern matching for live tailing and quick searches"
    [("E" "Errors only" (lambda () (interactive) (setq cloudwatch-current-filter "ERROR") (cloudwatch-transient)))
     ("W" "Warnings" (lambda () (interactive) (setq cloudwatch-current-filter "WARN") (cloudwatch-transient)))
-    ("5" "5xx errors" (lambda () (interactive) (setq cloudwatch-current-filter "{ $.statusCode >= 500 }") (cloudwatch-transient)))]
+    ("x" "5xx errors" (lambda () (interactive) (setq cloudwatch-current-filter "{ $.statusCode >= 500 }") (cloudwatch-transient)))]
    [("n" "Namespace" cloudwatch-set-namespace-filter)
     ("p" "Pod name" cloudwatch-set-pod-filter)
     ("c" "Clear filter" (lambda () (interactive) (setq cloudwatch-current-filter "") (cloudwatch-transient)))]]
@@ -835,7 +837,8 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
       (when (yes-or-no-p "Clear all favorites? ")
         (setq cloudwatch-favorite-log-groups nil)
         (customize-save-variable 'cloudwatch-favorite-log-groups nil)
-        (message "Favorites cleared"))))]
+        (message "Favorites cleared"))
+      (cloudwatch-transient)))]
   ["Actions"
    [("t" "Tail: Live streaming logs with filters" cloudwatch-do-tail-safe :transient nil)
     ("Q" "Query: Snapshot search with filters" cloudwatch-do-query-safe :transient nil)
@@ -853,8 +856,10 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
                               `(lambda () (interactive)
                                  (setq cloudwatch-current-log-group ,log-group)
                                  (cloudwatch-transient)))))
-    ;; Show helpful message when no favorites
-    (list (list "!" "No favorites yet" 'ignore))))
+    ;; Return a properly parsed suffix for empty state
+    (transient-parse-suffixes
+     'cloudwatch-transient
+     '(("!" "No favorites yet - press 'a' to add" ignore)))))
 
 ;;;###autoload
 (defun cloudwatch ()
