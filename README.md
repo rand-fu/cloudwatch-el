@@ -64,7 +64,7 @@ Advanced SQL-like queries for log analysis:
 
 ## Quick Start
 
-``` elisp
+```elisp
 ;; Install and configure
 (use-package cloudwatch
   :custom
@@ -129,6 +129,18 @@ Add custom query templates:
     "fields @timestamp, duration | stats pct(duration, 99) by bin(5m)"))
 ```
 
+### Column Widths
+Customize Insights result display for your monitor:
+
+```elisp
+(setq cloudwatch-insights-column-widths
+      '(("@timestamp" . 26)
+        ("@message" . 150)  ; Extra wide for ultrawide monitors
+        ("log" . 150)
+        ("kubernetes.pod_name" . 60)
+        (default . 40)))
+```
+
 ### Query Limits
 Adjust default result limits:
 
@@ -150,6 +162,7 @@ Adjust default result limits:
 - `m` - Set minutes to look back
 - `M` - Set query result limit
 - `f` - Set filter pattern
+- `w` - Toggle wide mode for Insights results
 - `R` - Refresh log groups cache
 
 ### Quick Filters
@@ -166,6 +179,9 @@ Adjust default result limits:
 
 ### Favorites
 - `1-5` - Quick select from favorite log groups
+- `a` - Add current log group to favorites
+- `d` - Remove a log group from favorites
+- `C` - Clear all favorites
 
 ### Actions
 - `t` - Tail logs (live streaming with filters)
@@ -256,3 +272,11 @@ CloudWatch-el follows the Unix philosophy - it's just the pipe that brings data 
 - Use Insights for aggregations instead of fetching all events
 - Reduce `cloudwatch-query-limit` for basic queries
 - Use time and filter constraints to limit data
+
+## Contributing
+
+Contributions welcome! Please feel free to submit issues and pull requests.
+
+## License
+
+GPL-3.0 - See LICENSE file for details.
