@@ -237,12 +237,18 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
 (defun cloudwatch--setup-highlighting ()
   "Setup common highlighting patterns."
   (font-lock-mode 1)
-  (highlight-regexp "ERROR\\|FATAL\\|Exception" 'hi-red-b)
-  (highlight-regexp "WARN\\|WARNING" 'hi-yellow)
-  (highlight-regexp "INFO" 'hi-green)
-  (highlight-regexp "DEBUG" 'hi-blue)
-  (highlight-regexp "\"[^\"]+\":" 'font-lock-keyword-face)
-  (highlight-regexp "[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}" 'font-lock-comment-face))
+  ;; Use font-lock-add-keywords instead of highlight-regexp
+  (font-lock-add-keywords nil
+                          '(("\\bERROR\\b\\|\"ERROR\"\\|\"error\"\\|:ERROR:\\|\\[ERROR\\]" . 'hi-red-b)
+                            ("\\bFATAL\\b\\|\"FATAL\"\\|\"fatal\"\\|\\[FATAL\\]" . 'hi-red-b)
+                            ("\\bException\\b\\|\"exception\"" . 'hi-red-b)
+                            ("\\bWARN\\b\\|\\bWARNING\\b\\|\"WARN\"\\|\"warn\"\\|\\[WARN\\]\\|\\[WARNING\\]" . 'hi-yellow)
+                            ("\\bINFO\\b\\|\"INFO\"\\|\"info\"\\|\\[INFO\\]" . 'hi-green)
+                            ("\\bDEBUG\\b\\|\"DEBUG\"\\|\"debug\"\\|\\[DEBUG\\]" . 'hi-blue)
+                            ("\"[^\"]+\":" . 'font-lock-keyword-face)
+                            ("[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}" . 'font-lock-comment-face)))
+  (font-lock-flush)
+  (font-lock-ensure))
 
 (defun cloudwatch--pad-or-truncate (str width)
   "Pad STR to WIDTH or truncate with ellipsis if longer."
@@ -450,7 +456,6 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
           (insert (format "Filter: %s\n" cloudwatch-current-filter)))
         (insert "─────────────────────────────────────────────────\n")
         (insert "⏳ Loading logs...\n")
-        ;; (cloudwatch--setup-highlighting)
         (toggle-truncate-lines 1)
         (local-set-key (kbd "q") 'kill-current-buffer)
         (local-set-key (kbd "g") 'cloudwatch-requery)
@@ -659,10 +664,10 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
                                          :time-range (format "Last %d minutes" cloudwatch-current-minutes)
                                          :query cloudwatch-insights-query)))
                    (cloudwatch-insights-format-results (alist-get 'results result) query-info)))
-               (cloudwatch--setup-highlighting)
                (read-only-mode 1)
                (local-set-key (kbd "q") 'kill-current-buffer)
                (local-set-key (kbd "g") 'cloudwatch-rerun-insights)
+               (cloudwatch--setup-highlighting)
                (message "Insights query complete!")))
             
             ((string= status "Failed")
