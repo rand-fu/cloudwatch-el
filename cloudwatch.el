@@ -6,7 +6,7 @@
 ;; Maintainer: Randol Reeves <randol.reeves+emacs@gmail.com>
 ;; Created: November 04, 2025
 ;; Modified: November 04, 2025
-;; Version: 0.3.0
+;; Version: 0.3.1
 ;; Keywords: tools aws cloudwatch logs monitoring devops kubernetes observability
 ;; Homepage: https://github.com/rand-fu/cloudwatch-el
 ;; Package-Requires: ((emacs "27.1") (transient "0.3.0"))
@@ -288,15 +288,16 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
     ;; Remove if already exists (to move to front)
     (setq cloudwatch-favorite-log-groups
           (delete log-group cloudwatch-favorite-log-groups))
-    ;; Add to front
+    ;; Add to the front
     (push log-group cloudwatch-favorite-log-groups)
-    ;; Keep only first 5 (or configurable limit)
-    (when (> (length cloudwatch-favorite-log-groups) 5)
-      (setcdr (nthcdr 9 cloudwatch-favorite-log-groups) nil))
-    ;; Save
+    ;; Keep only first 5 (seq-take handles short lists gracefully)
+    (setq cloudwatch-favorite-log-groups
+          (seq-take cloudwatch-favorite-log-groups 5))
+    ;; Save it
     (customize-save-variable 'cloudwatch-favorite-log-groups
                              cloudwatch-favorite-log-groups)
-    (message "Added to favorites: %s" (truncate-string-to-width log-group 50))))
+    (message "Added to favorites: %s" (truncate-string-to-width log-group 50)))
+  (cloudwatch-transient))
 
 (defun cloudwatch-remove-from-favorites ()
   "Remove a log group from favorites."
