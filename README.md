@@ -256,6 +256,32 @@ CloudWatch-el follows the Unix philosophy - it's just the pipe that brings data 
 - `M-x clone-indirect-buffer` - View multiple filtered versions side-by-side
 - `C-u C-x =` - Inspect characters (useful for debugging encoding issues)
 
+### How do we handling JSON parsing in the current implementation?
+
+We don't!
+
+In `cloudwatch-do-query`, we're using:
+
+    aws logs filter-log-events ... --output text
+
+The `--output text` means AWS CLI returns tab-separated plain text, not JSON. Each line looks like this.
+
+    EVENTS	1234567890	log-stream-name	Your actual log message here
+
+We're just doing simple text cleanup.
+
+    ;; Remove "EVENTS\t" prefix from each line
+    (goto-char (point-min))
+    (while (re-search-forward "^EVENTS\t" nil t)
+      (replace-match ""))
+
+The JSON you see in the output is just the raw log content being displayed as-is. We're not parsing or pretty-printing it. The filter patterns like `{ $.kubernetes.pod_name = *nginx* }` are handled by AWS CloudWatch on the server side.
+
+-   AWS CLI does the filtering server-side
+-   We just display the raw results
+-   Syntax highlighting makes it readable enough
+-   No need for `jq` or Emacs JSON parsing
+
 ## Troubleshooting
 
 ### No log groups appearing

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.4.0
+
+### Added
+
+- README section to explain the `--output text` approach (no JSON parsing needed)
+
+### Changed
+- Switched from `highlight-regexp` to `font-lock-add-keywords` with more comprehensive patterns (handles `"ERROR"`, `[ERROR]`, `:ERROR:` variants)
+
+### Fixed
+- Bug when adding favorites to a full list. The old code used `(nthcdr 9 ...)` but comment said "first 5". Now correctly uses `(seq-take ... 5)`
+- `cloudwatch-add-to-favorites` now calls `(cloudwatch-transient)` at the end to return to the menu
+- Moved `cloudwatch--setup-highlighting` to after `read-only-mode` in insights, ensuring font-lock applies properly
+
 ## 0.3.0
 
 ### Added
