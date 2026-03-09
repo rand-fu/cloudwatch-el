@@ -6,7 +6,7 @@
 ;; Maintainer: Randol Reeves <randol.reeves+emacs@gmail.com>
 ;; Created: November 04, 2025
 ;; Modified: January 29, 2026
-;; Version: 0.4.0
+;; Version: 0.4.1
 ;; Keywords: tools aws cloudwatch logs monitoring devops kubernetes observability
 ;; Homepage: https://github.com/rand-fu/cloudwatch-el
 ;; Package-Requires: ((emacs "27.1") (transient "0.3.0"))
@@ -353,11 +353,7 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
      (setq cloudwatch-current-log-group
            (completing-read (format "Select log group (%d available): " (length log-groups))
                             log-groups
-                            nil t nil 'cloudwatch-history))
-     ;; Offer to add to favorites
-     (when (and cloudwatch-current-log-group
-                (y-or-n-p "Add to favorites? "))
-       (cloudwatch-add-to-favorites cloudwatch-current-log-group)))
+                            nil t nil 'cloudwatch-history)))
    (cloudwatch-transient)))
 
 (defun cloudwatch-refresh-cache ()
@@ -731,10 +727,8 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
                                  (list 'cloudwatch-row-index i
                                        'keymap (let ((map (make-sparse-keymap)))
                                                  (define-key map (kbd "RET") 'cloudwatch-insights-show-detail)
-                                                 (define-key map (kbd "SPC") 'cloudwatch-insights-show-detail)
                                                  map)
-                                       'help-echo "Press RET to view full record"
-                                       'mouse-face 'highlight)))))))
+                                       'help-echo "Press RET to view full record")))))))
   
   (insert "\n" (propertize "Tip: Press RET on any row to view full details"
                            'face 'font-lock-comment-face)))

@@ -198,20 +198,12 @@ Adjust default result limits:
 
 ## Usage Examples
 
-### Basic Filtering
+### Interactive Results
 
-```elisp
-;; Quick error search
-M-x cloudwatch RET
-E                         ; Filter for ERROR
-t                         ; Start tailing
-
-;; Pod-specific logs
-M-x cloudwatch RET
-p                         ; Set pod filter
-my-app-pod-*             ; Use wildcards!
-Q                         ; Query snapshot
-```
+After running an Insights query:
+- **RET** on any row - View full log entry with pretty-printed JSON
+- **g** - Rerun the query
+- **q** - Close results
 
 ### CloudWatch Insights Queries
 
@@ -230,12 +222,83 @@ fields @timestamp, @message | filter @message like /timeout/ | stats count() by 
 I                         ; Run query
 ```
 
-### Interactive Results
 
-After running an Insights query:
-- **RET** on any row - View full log entry with pretty-printed JSON
-- **g** - Rerun the query
-- **q** - Close results
+### Filter Pattern Examples
+
+> **Note:** Filter patterns depend on your log format. The examples below are based on common patterns from EKS Container Insights, Lambda, and structured JSON logging. Adjust field names to match your application's log schema.
+
+#### Simple Text Patterns
+
+```
+ERROR                           # Match any line containing ERROR
+"Connection refused"            # Match exact phrase
+OutOfMemory                     # JVM OOM errors
+```
+
+#### JSON Field Filters
+
+```
+# Kubernetes/EKS logs
+{ $.kubernetes.namespace_name = "production" }
+{ $.kubernetes.pod_name = "*api-server*" }
+{ $.level = "ERROR" }
+
+# HTTP status codes
+{ $.statusCode >= 400 }
+{ $.statusCode >= 500 && $.statusCode < 600 }
+
+# Response time (if logged)
+{ $.duration > 1000 }
+
+# Combining conditions
+{ $.kubernetes.namespace_name = "prod" && $.level = "ERROR" }
+```
+
+#### Advanced Patterns
+
+```
+# OOM and memory issues
+{ $.message = "*OOMKilled*" }
+{ $.message = "*OutOfMemoryError*" }
+{ $.reason = "OOMKilled" }
+
+# Container lifecycle events
+{ $.message = "*CrashLoopBackOff*" }
+{ $.message = "*ImagePullBackOff*" }
+
+# Network issues
+{ $.message = "*connection refused*" }
+{ $.message = "*timeout*" && $.level = "ERROR" }
+```
+
+#### Insights Query Examples
+
+```sql
+-- Errors by pod in last hour
+fields @timestamp, kubernetes.pod_name, @message
+| filter @message like /ERROR/
+| stats count() by kubernetes.pod_name
+
+-- Find OOM events with context
+fields @timestamp, kubernetes.pod_name, kubernetes.namespace_name, @message
+| filter @message like /OOMKilled|OutOfMemory|Cannot allocate memory/
+| sort @timestamp desc
+
+-- Slow requests
+fields @timestamp, @message, duration
+| filter duration > 1000
+| sort duration desc
+| limit 20
+
+-- Request rate per minute
+stats count() by bin(1m)
+
+-- Error rate percentage
+stats count() as total,
+      sum(level="ERROR") as errors,
+      (sum(level="ERROR") / count()) * 100 as error_pct
+  by bin(5m)
+```
 
 ## Tips & Tricks
 

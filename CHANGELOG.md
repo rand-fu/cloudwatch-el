@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.4.1
+
+### Fixed
+- Removed mouse hover highlighting on Insights result rows that was visually distracting
+- Space key no longer triggers detail view in results buffer (only RET), preventing conflicts with Doom leader key setups
+- Removed automatic "Add to favorites?" prompt when browsing log groups. Use `a` key in favorites management menu instead
+
 ## 0.4.0
 
 ### Added
