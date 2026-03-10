@@ -48,7 +48,7 @@ Advanced SQL-like queries for log analysis:
 
 ### List and Select Log Groups
 ![Log Group Selection](screenshots/log-group-selection.png)
-*Browse and select from all available log groups in your AWS account*
+*Browse all available log groups in your AWS account*
 
 ### Live Log Tailing
 ![Live Tailing](screenshots/live-tail.png)
@@ -59,8 +59,14 @@ Advanced SQL-like queries for log analysis:
 *Complex JSON field queries to find exactly what you need*
 
 ### CloudWatch Insights Queries
-![CloudWatch Insights](screenshots/cloudwatch-insights.png)
+![Save Insights Queries](screenshots/cloudwatch-insights-saved-queries.png)
+*Save or create query templates for quick access*
+
+![Query and Filter Insights](screenshots/cloudwatch-insights.png)
 *Advanced filtering with CloudWatch Insights queries*
+
+![Refresh or Expand on Results](screenshots/cloudwatch-insights-refresh.png)
+*Refresh, expand, quit*
 
 ## Quick Start
 
@@ -190,9 +196,8 @@ Adjust default result limits:
 
 ### In Results Buffers
 - `RET` - View full log entry detail (Insights results)
-- `SPC` - View full log entry detail (alternative)
 - `g` - Rerun query/refresh results
-- `+` - Increase query limit and rerun
+- `+` - Increase query limit and rerun (or double the time range for Insights results)
 - `-` - Decrease query limit and rerun
 - `q` - Close buffer
 
@@ -203,6 +208,7 @@ Adjust default result limits:
 After running an Insights query:
 - **RET** on any row - View full log entry with pretty-printed JSON
 - **g** - Rerun the query
+- **+** - Double the time range
 - **q** - Close results
 
 ### CloudWatch Insights Queries

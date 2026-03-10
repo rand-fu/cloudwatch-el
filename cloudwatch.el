@@ -5,8 +5,8 @@
 ;; Author: Randol Reeves <randol.reeves+emacs@gmail.com>
 ;; Maintainer: Randol Reeves <randol.reeves+emacs@gmail.com>
 ;; Created: November 04, 2025
-;; Modified: January 29, 2026
-;; Version: 0.4.1
+;; Modified: March 10, 2026
+;; Version: 0.5.0
 ;; Keywords: tools aws cloudwatch logs monitoring devops kubernetes observability
 ;; Homepage: https://github.com/rand-fu/cloudwatch-el
 ;; Package-Requires: ((emacs "27.1") (transient "0.3.0"))
@@ -148,9 +148,20 @@ Used to determine if cache needs refresh (10 minute expiry).")
 (defvar cloudwatch-insights-query nil
   "Current CloudWatch Insights query string.")
 
+;; Literally just so we can have a key that evil-mode doesn't take over for expanding the time.
+(defvar cloudwatch-insights-results-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "q") 'kill-current-buffer)
+    (define-key map (kbd "g") 'cloudwatch-rerun-insights)
+    (define-key map (kbd "+") 'cloudwatch-insights-expand-time)
+    (define-key map (kbd "RET") 'cloudwatch-insights-show-detail)
+    map)
+  "Keymap for CloudWatch Insights results.")
+
 ;;;; Buffer locals
 (defvar-local cloudwatch-insights-query-info nil
-  "Buffer-local storage for Insights query metadata.")
+  "Buffer-local storage for Insights query metadata and parameters.
+Used for refreshing queries with \='g\=' and expanding time range with \='G\='.")
 
 (defvar-local cloudwatch-insights-results nil
   "Buffer-local storage for Insights query results.")
@@ -168,6 +179,12 @@ validation fails or user cancels, instead of leaving them stranded."
       (cloudwatch-transient))
      (quit
       (cloudwatch-transient))))
+
+;; Minor mode
+(define-minor-mode cloudwatch-insights-results-mode
+  "Minor mode for CloudWatch Insights results buffer."
+  :lighter " CW-Insights"
+  :keymap cloudwatch-insights-results-mode-map)
 
 ;;;; Helper functions
 (defun cloudwatch-get-region ()
@@ -601,6 +618,12 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
         (with-current-buffer output-buffer
           (let ((inhibit-read-only t))
             (erase-buffer)
+            ;; Store query params for refresh
+            (setq-local cloudwatch-insights-query-info
+                        (list :log-group cloudwatch-current-log-group
+                              :region cloudwatch-current-region
+                              :minutes cloudwatch-current-minutes
+                              :query cloudwatch-insights-query))
             (insert "═══ CloudWatch Insights Query ═══\n")
             (insert (format "Log Group: %s\n" cloudwatch-current-log-group))
             (insert (format "Region: %s\n" (cloudwatch-get-region)))
@@ -655,16 +678,11 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
                    (replace-match "✓ Query complete!"))
                  (goto-char (point-max))
                  (insert "\n")
-                 (let ((query-info (list :log-group cloudwatch-current-log-group
-                                         :region (cloudwatch-get-region)
-                                         :time-range (format "Last %d minutes" cloudwatch-current-minutes)
-                                         :query cloudwatch-insights-query)))
-                   (cloudwatch-insights-format-results (alist-get 'results result) query-info)))
-               (read-only-mode 1)
-               (local-set-key (kbd "q") 'kill-current-buffer)
-               (local-set-key (kbd "g") 'cloudwatch-rerun-insights)
-               (cloudwatch--setup-highlighting)
-               (message "Insights query complete!")))
+                 (cloudwatch-insights-format-results (alist-get 'results result))
+                 (read-only-mode 1)
+                 (cloudwatch-insights-results-mode 1)
+                 (cloudwatch--setup-highlighting)
+                 (message "Insights query complete!"))))
             
             ((string= status "Failed")
              (with-current-buffer buffer
@@ -680,18 +698,18 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
         (with-current-buffer buffer
           (let ((inhibit-read-only t))
             (goto-char (point-min))
-            (when (search-forward "Query running..." nil t)
+            (when (search-forward "⏳ Query running..." nil t)
               (replace-match (format "Error: %s" (error-message-string err))))))
         (message "Insights query error: %s" (error-message-string err)))))))
 
-(defun cloudwatch-insights-format-results (results query-info)
-  "Format Insights QUERY-INFO and RESULTS for display."
+(defun cloudwatch-insights-format-results (results)
+  "Format Insights RESULTS for display.
+Uses buffer-local `cloudwatch-insights-query-info' for metadata."
   (if (or (not results)
           (seq-empty-p results))
       (insert (propertize "No results found.\n" 'face 'font-lock-comment-face))
     ;; Store results for detail view
     (setq-local cloudwatch-insights-results results)
-    (setq-local cloudwatch-insights-query-info query-info)
     
     ;; Get field names from first result
     (let ((fields (mapcar (lambda (item) (alist-get 'field item)) (aref results 0))))
@@ -729,8 +747,8 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
                                                  (define-key map (kbd "RET") 'cloudwatch-insights-show-detail)
                                                  map)
                                        'help-echo "Press RET to view full record")))))))
-  
-  (insert "\n" (propertize "Tip: Press RET on any row to view full details"
+     
+  (insert "\n" (propertize "Keys: RET=details  g=refresh  +=expand time  q=quit"
                            'face 'font-lock-comment-face)))
 
 (defun cloudwatch-insights-show-detail ()
@@ -764,15 +782,33 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
                         (insert (or value "null")))
                       (insert "\n\n")))
                   row)
-            
+               
             (goto-char (point-min))
             (cloudwatch-detail-mode))
           (pop-to-buffer (current-buffer)))))))
 
 (defun cloudwatch-rerun-insights ()
-  "Rerun the last Insights query."
+  "Rerun the Insights query with stored parameters."
   (interactive)
-  (cloudwatch-do-insights-query))
+  (if cloudwatch-insights-query-info
+      (let ((cloudwatch-current-log-group (plist-get cloudwatch-insights-query-info :log-group))
+            (cloudwatch-current-region (plist-get cloudwatch-insights-query-info :region))
+            (cloudwatch-current-minutes (plist-get cloudwatch-insights-query-info :minutes))
+            (cloudwatch-insights-query (plist-get cloudwatch-insights-query-info :query)))
+        (cloudwatch-do-insights-query))
+    ;; Fallback to current globals
+    (cloudwatch-do-insights-query)))
+
+(defun cloudwatch-insights-expand-time ()
+  "Double the time range and rerun Insights query."
+  (interactive)
+  (if cloudwatch-insights-query-info
+      (let ((new-minutes (* 2 (plist-get cloudwatch-insights-query-info :minutes))))
+        (setq cloudwatch-insights-query-info
+              (plist-put cloudwatch-insights-query-info :minutes new-minutes))
+        (message "Expanding to %d minutes..." new-minutes)
+        (cloudwatch-rerun-insights))
+    (message "No query info stored - run a query first")))
 
 (define-derived-mode cloudwatch-detail-mode special-mode "CW-Detail"
   "Mode for viewing CloudWatch log entry details."
