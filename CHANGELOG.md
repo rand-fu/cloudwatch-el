@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.5.0
+
+### Added
+- New `cloudwatch-insights-results-mode` minor mode for Insights results buffers with dedicated keymap
+- `cloudwatch-insights-expand-time` command (bound to `+`) to double the time range and rerun queries
+- Buffer-local storage of query parameters (log-group, region, minutes, query) for reliable refresh and time expansion
+
+### Changed
+- `cloudwatch-rerun-insights` now uses stored buffer-local parameters instead of global state
+- Results buffer keybindings are now managed through the minor mode keymap, preventing conflicts with Evil mode
+
+### Fixed
+- Keybindings in results buffers no longer get overridden by Evil mode
+
 ## 0.4.1
 
 ### Fixed
