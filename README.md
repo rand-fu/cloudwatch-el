@@ -48,7 +48,7 @@ Advanced SQL-like queries for log analysis:
 
 ### List and Select Log Groups
 ![Log Group Selection](screenshots/log-group-selection.png)
-*Browse and select from all available log groups in your AWS account*
+*Browse all available log groups in your AWS account*
 
 ### Live Log Tailing
 ![Live Tailing](screenshots/live-tail.png)
@@ -60,13 +60,13 @@ Advanced SQL-like queries for log analysis:
 
 ### CloudWatch Insights Queries
 ![Save Insights Queries](screenshots/cloudwatch-insights-saved-queries.png)
-*Save your favorite queries or create templates for quick access*
+*Save or create query templates for quick access*
 
 ![Query and Filter Insights](screenshots/cloudwatch-insights.png)
 *Advanced filtering with CloudWatch Insights queries*
 
 ![Refresh or Expand on Results](screenshots/cloudwatch-insights-refresh.png)
-*Refresh or expand the time range when debugging with Insights queries*
+*Refresh, expand, quit*
 
 ## Quick Start
 
