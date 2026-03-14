@@ -5,8 +5,8 @@
 ;; Author: Randol Reeves <randol.reeves+emacs@gmail.com>
 ;; Maintainer: Randol Reeves <randol.reeves+emacs@gmail.com>
 ;; Created: November 04, 2025
-;; Modified: March 10, 2026
-;; Version: 0.5.0
+;; Modified: March 13, 2026
+;; Version: 0.5.1
 ;; Keywords: tools aws cloudwatch logs monitoring devops kubernetes observability
 ;; Homepage: https://github.com/rand-fu/cloudwatch-el
 ;; Package-Requires: ((emacs "27.1") (transient "0.3.0"))
@@ -18,14 +18,15 @@
 ;;
 ;;; Commentary:
 ;;
-;; This package provides an interface for viewing AWS CloudWatch logs
-;; directly from Emacs, eliminating the need to use the AWS web console.
+;; An Emacs interface for browsing AWS CloudWatch logs without leaving
+;; your editor.
 ;;
 ;; Features:
 ;; - Interactive transient-based interface for easy navigation
 ;; - Live log tailing with automatic updates
 ;; - Snapshot queries for historical log analysis
-;; - Advanced filter patterns with quick presets for common searches
+;; - CloudWatch Insights support for advanced queries and aggregations
+;; - Filter patterns with quick presets for common searches
 ;; - Region switching for multi-region deployments
 ;; - Favorites management for frequently accessed log groups
 ;; - Syntax highlighting for log levels (ERROR, WARN, INFO, DEBUG)
@@ -34,21 +35,8 @@
 ;; Usage:
 ;;   M-x cloudwatch RET
 ;;
-;; This will open a transient menu where you can:
-;; - Select AWS region and log groups
-;; - Set time ranges and filters
-;; - Choose between live tailing or snapshot queries
-;; - Access favorite log groups with quick keys
-;;
-;; The package requires AWS CLI to be installed and configured with
-;; appropriate credentials. It works particularly well with EKS/Container
-;; Insights logs but supports any CloudWatch log group.
-;;
-;; See README.md for detailed configuration and filter pattern examples.
-;;
-;;  Description:
-;;  An Emacs interface for AWS CloudWatch logs with live tailing, querying,
-;;  and filtering capabilities through a transient-based UI.
+;; Requires AWS CLI installed and configured with appropriate credentials.
+;; See README.md for detailed configuration and examples.
 ;;
 ;;; Code:
 
@@ -266,14 +254,6 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
                             ("[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}" . 'font-lock-comment-face)))
   (font-lock-flush)
   (font-lock-ensure))
-
-(defun cloudwatch--pad-or-truncate (str width)
-  "Pad STR to WIDTH or truncate with ellipsis if longer."
-  (let ((len (length str)))
-    (cond
-     ((= len width) str)
-     ((< len width) (concat str (make-string (- width len) ?\s)))
-     (t (concat (substring str 0 (- width 1)) "…")))))
 
 ;;;; AWS CLI operations
 (defun cloudwatch-check-aws-cli ()
@@ -747,7 +727,7 @@ Uses buffer-local `cloudwatch-insights-query-info' for metadata."
                                                  (define-key map (kbd "RET") 'cloudwatch-insights-show-detail)
                                                  map)
                                        'help-echo "Press RET to view full record")))))))
-     
+  
   (insert "\n" (propertize "Keys: RET=details  g=refresh  +=expand time  q=quit"
                            'face 'font-lock-comment-face)))
 
@@ -782,7 +762,7 @@ Uses buffer-local `cloudwatch-insights-query-info' for metadata."
                         (insert (or value "null")))
                       (insert "\n\n")))
                   row)
-               
+            
             (goto-char (point-min))
             (cloudwatch-detail-mode))
           (pop-to-buffer (current-buffer)))))))
