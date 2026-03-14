@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.5.1
+
+Just some clean up.
+
+### Removed
+- Unused `cloudwatch--pad-or-truncate` function
+- Redundant description block in commentary
+- Unnecessary `after!` block and wrong variable name in Doom integration
+
 ## 0.5.0
 
 ### Added
