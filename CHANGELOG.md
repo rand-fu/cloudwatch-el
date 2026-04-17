@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.6.0 
+
+### Added
+- Absolute date range selection (`T` in transient menu)
+- `cloudwatch--parse-time` with input validation
+- Time range helpers (`--start-time-millis`, `--end-time-millis`, `--time-description`)
+
+### Changed
+- Both query and Insights paths now use shared time helpers
+- Time mode displayed in transient (relative vs absolute range)
+- Expand time (`+`) gracefully declines in absolute mode with helpful message
+
+### Fixed
+- Query and Insights used inconsistent inline time calculations
+
 ## 0.5.1
 
 Just some clean up.

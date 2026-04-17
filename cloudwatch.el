@@ -6,13 +6,13 @@
 ;; Maintainer: Randol Reeves <randol.reeves+emacs@gmail.com>
 ;; Created: November 04, 2025
 ;; Modified: March 13, 2026
-;; Version: 0.5.1
+;; Version: 0.6.0
 ;; Keywords: tools aws cloudwatch logs monitoring devops kubernetes observability
 ;; Homepage: https://github.com/rand-fu/cloudwatch-el
 ;; Package-Requires: ((emacs "27.1") (transient "0.3.0"))
 ;;
 ;; This file is not part of GNU Emacs.
-;; 
+;;
 ;; Licensed under the GNU General Public License v3.0 or later.
 ;; See the LICENSE file in the project root for full license text.
 ;;
@@ -27,6 +27,7 @@
 ;; - Snapshot queries for historical log analysis
 ;; - CloudWatch Insights support for advanced queries and aggregations
 ;; - Filter patterns with quick presets for common searches
+;; - Relative (minutes back) or absolute (date range) time selection
 ;; - Region switching for multi-region deployments
 ;; - Favorites management for frequently accessed log groups
 ;; - Syntax highlighting for log levels (ERROR, WARN, INFO, DEBUG)
@@ -135,6 +136,15 @@ Used to determine if cache needs refresh (10 minute expiry).")
 
 (defvar cloudwatch-insights-query nil
   "Current CloudWatch Insights query string.")
+
+(defvar cloudwatch-time-mode 'relative
+  "Time selection mode: `relative' (minutes back) or `absolute' (date range).")
+
+(defvar cloudwatch-start-time nil
+  "Absolute start time as Emacs time value.")
+
+(defvar cloudwatch-end-time nil
+  "Absolute end time as Emacs time value.")
 
 ;; Literally just so we can have a key that evil-mode doesn't take over for expanding the time.
 (defvar cloudwatch-insights-results-mode-map
@@ -254,6 +264,69 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
                             ("[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}" . 'font-lock-comment-face)))
   (font-lock-flush)
   (font-lock-ensure))
+
+;;; Absolute date range
+;; Trying to keep this simple but make it useful...
+
+;; parse-time-string seems fragile. It handles "YYYY-MM-DD HH:MM" fine but can silently produce garbage on unexpected formats. Try to guard against it.
+(defun cloudwatch--parse-time (str)
+  "Parse STR as local time, erroring on invalid input."
+  (let ((parsed (parse-time-string str)))
+    (unless (and (nth 1 parsed) (nth 2 parsed)  ; min, hour
+                 (nth 3 parsed) (nth 4 parsed) (nth 5 parsed))  ; day, month, year
+      (user-error "Invalid time format: %s (expected YYYY-MM-DD HH:MM)" str))
+    (encode-time 0
+                 (nth 1 parsed)   ; minute
+                 (nth 2 parsed)   ; hour
+                 (nth 3 parsed)   ; day
+                 (nth 4 parsed)   ; month
+                 (nth 5 parsed))));; year
+
+;; A way to set the time range
+(defun cloudwatch-set-time-range ()
+  "Set an absolute time range for queries."
+  (interactive)
+  (cloudwatch-with-transient-fallback
+   (let* ((start-str (read-string "Start (YYYY-MM-DD HH:MM): "
+                                  (format-time-string "%Y-%m-%d %H:%M"
+                                                      (time-subtract nil (* cloudwatch-current-minutes 60)))))
+          (end-str (read-string "End (YYYY-MM-DD HH:MM): "
+                                (format-time-string "%Y-%m-%d %H:%M"))))
+     (setq cloudwatch-time-mode 'absolute
+           cloudwatch-start-time (cloudwatch--parse-time start-str)
+           cloudwatch-end-time (cloudwatch--parse-time end-str)))
+   (cloudwatch-transient)))
+
+(defun cloudwatch-clear-time-range ()
+  "Switch back to relative time mode."
+  (interactive)
+  (setq cloudwatch-time-mode 'relative
+        cloudwatch-start-time nil
+        cloudwatch-end-time nil)
+  (cloudwatch-transient))
+
+;; Helper for start times
+(defun cloudwatch--start-time-millis ()
+  "Get query start time in milliseconds."
+  (if (eq cloudwatch-time-mode 'absolute)
+      (* (truncate (float-time cloudwatch-start-time)) 1000)
+    (* (- (truncate (float-time)) (* cloudwatch-current-minutes 60)) 1000)))
+
+;; Helper for end times
+(defun cloudwatch--end-time-millis ()
+  "Get query end time in milliseconds."
+  (if (eq cloudwatch-time-mode 'absolute)
+      (* (truncate (float-time cloudwatch-end-time)) 1000)
+    (* (truncate (float-time)) 1000)))
+
+;; I am friendly hu-man
+(defun cloudwatch--time-description ()
+  "Return a human-readable description of the current time range."
+  (if (eq cloudwatch-time-mode 'absolute)
+      (format "%s → %s"
+              (format-time-string "%Y-%m-%d %H:%M" cloudwatch-start-time)
+              (format-time-string "%Y-%m-%d %H:%M" cloudwatch-end-time))
+    (format "Last %d minutes" cloudwatch-current-minutes)))
 
 ;;;; AWS CLI operations
 (defun cloudwatch-check-aws-cli ()
@@ -429,7 +502,7 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
          (cmd (format "aws logs filter-log-events --log-group-name '%s' --region %s --start-time %d --limit %d --output text%s"
                       cloudwatch-current-log-group
                       (cloudwatch-get-region)
-                      (* (- (truncate (float-time)) (* cloudwatch-current-minutes 60)) 1000)
+                      (cloudwatch--start-time-millis)
                       cloudwatch-query-limit
                       filter-args))
          (process-environment (cons "AWS_PAGER="
@@ -440,10 +513,10 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
     (let ((output-buffer (get-buffer-create buffer-name)))
       (with-current-buffer output-buffer
         (erase-buffer)
-        (insert (format "Querying: %s\nRegion: %s\nTime range: Last %d minutes\nLimit: %d events\n"
+        (insert (format "Querying: %s\nRegion: %s\nTime range: %s\nLimit: %d events\n"
                         cloudwatch-current-log-group
                         (cloudwatch-get-region)
-                        cloudwatch-current-minutes
+                        (cloudwatch--time-description)
                         cloudwatch-query-limit))
         (when (not (string-empty-p cloudwatch-current-filter))
           (insert (format "Filter: %s\n" cloudwatch-current-filter)))
@@ -574,10 +647,9 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
                               (car (last (split-string cloudwatch-current-log-group "/") 2))))
          (output-buffer (get-buffer-create buffer-name)))
     
-    ;; Start the query
     (message "Starting Insights query...")
-    (let* ((start-time (* (- (truncate (float-time)) (* cloudwatch-current-minutes 60)) 1000))
-           (end-time (* (truncate (float-time)) 1000))
+    (let* ((start-time (cloudwatch--start-time-millis))
+           (end-time (cloudwatch--end-time-millis))
            (start-cmd (format "aws logs start-query --log-group-name '%s' --region %s --start-time %d --end-time %d --query-string '%s' --output text"
                               cloudwatch-current-log-group
                               (cloudwatch-get-region)
@@ -607,7 +679,7 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
             (insert "═══ CloudWatch Insights Query ═══\n")
             (insert (format "Log Group: %s\n" cloudwatch-current-log-group))
             (insert (format "Region: %s\n" (cloudwatch-get-region)))
-            (insert (format "Time Range: Last %d minutes\n" cloudwatch-current-minutes))
+            (insert (format "Time Range: %s\n" (cloudwatch--time-description)))
             (insert (format "Query: %s\n" cloudwatch-insights-query))
             (insert "─────────────────────────────────\n")
             (insert "⏳ Query running...\n")))
@@ -780,15 +852,20 @@ Uses buffer-local `cloudwatch-insights-query-info' for metadata."
     (cloudwatch-do-insights-query)))
 
 (defun cloudwatch-insights-expand-time ()
-  "Double the time range and rerun Insights query."
+  "Double the time range and rerun Insights query.
+Only available in relative time mode."
   (interactive)
-  (if cloudwatch-insights-query-info
-      (let ((new-minutes (* 2 (plist-get cloudwatch-insights-query-info :minutes))))
-        (setq cloudwatch-insights-query-info
-              (plist-put cloudwatch-insights-query-info :minutes new-minutes))
-        (message "Expanding to %d minutes..." new-minutes)
-        (cloudwatch-rerun-insights))
-    (message "No query info stored - run a query first")))
+  (cond
+   ((null cloudwatch-insights-query-info)
+    (message "No query info stored - run a query first"))
+   ((eq cloudwatch-time-mode 'absolute)
+    (message "Time expansion not available in date range mode - use T to adjust"))
+   (t
+    (let ((new-minutes (* 2 (plist-get cloudwatch-insights-query-info :minutes))))
+      (setq cloudwatch-insights-query-info
+            (plist-put cloudwatch-insights-query-info :minutes new-minutes))
+      (message "Expanding to %d minutes..." new-minutes)
+      (cloudwatch-rerun-insights)))))
 
 (define-derived-mode cloudwatch-detail-mode special-mode "CW-Detail"
   "Mode for viewing CloudWatch log entry details."
@@ -821,7 +898,16 @@ Uses buffer-local `cloudwatch-insights-query-info' for metadata."
                                        (truncate-string-to-width cloudwatch-current-filter 40)))))
     ("w" "Wide mode" cloudwatch-toggle-wide-mode
      :description (lambda () (format "Wide mode: %s" (if cloudwatch-wide-mode "ON" "OFF"))))
-    ("R" "Refresh cache" cloudwatch-refresh-cache)]]
+    ("R" "Refresh cache" cloudwatch-refresh-cache)
+    ("T" "Time range" cloudwatch-set-time-range
+     :description (lambda ()
+                    (if (eq cloudwatch-time-mode 'absolute)
+                        (format "Range: %s → %s"
+                                (format-time-string "%m-%d %H:%M" cloudwatch-start-time)
+                                (format-time-string "%m-%d %H:%M" cloudwatch-end-time))
+                      "Range: relative (use Minutes)")))
+    ("C-t" "Clear time range" cloudwatch-clear-time-range
+     :if (lambda () (eq cloudwatch-time-mode 'absolute)))]]
   ["Quick Filters"
    :description "Simple pattern matching for live tailing and quick searches"
    [("E" "Errors only" (lambda () (interactive) (setq cloudwatch-current-filter "ERROR") (cloudwatch-transient)))

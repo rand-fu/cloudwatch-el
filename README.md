@@ -18,6 +18,7 @@ This started as a collection of functions I wrote for myself that got a little o
 - Advanced CloudWatch Insights filters
 - Favorites management
 - Async operations to keep Emacs responsive 
+- Relative (minutes back) or absolute (date range) time selection
 
 ### 🔍 Two Complementary Query Modes 
 
@@ -154,6 +155,9 @@ Adjust default result limits:
 (setq cloudwatch-query-limit 5000)  ; For basic queries
 ```
 
+### Default Time Mode
+The default mode is relative (minutes back). Absolute time ranges are set per-session via the transient menu and reset when you press `C-t` or restart Emacs.
+
 ## Usage
 
 - `SPC o c` - Open CloudWatch transient menu (Doom Emacs)
@@ -170,6 +174,8 @@ Adjust default result limits:
 - `f` - Set filter pattern
 - `w` - Toggle wide mode for Insights results
 - `R` - Refresh log groups cache
+- `T` - Set absolute time range (YYYY-MM-DD HH:MM)
+- `C-t` - Clear time range (return to relative mode)
 
 ### Quick Filters
 - `E` - Filter errors only
@@ -210,6 +216,20 @@ After running an Insights query:
 - **g** - Rerun the query
 - **+** - Double the time range
 - **q** - Close results
+
+### Time Range Selection
+
+By default, queries look back N minutes from now. For investigating specific incidents, switch to absolute time:
+
+```
+M-x cloudwatch RET
+T                         ; Set time range
+2026-04-17 10:00          ; Start time (local timezone)
+2026-04-17 13:00          ; End time (local timezone)
+I                         ; Run Insights query
+```
+
+Times are entered in your local timezone — Emacs handles the UTC conversion automatically. Press `C-t` in the transient to switch back to relative mode.
 
 ### CloudWatch Insights Queries
 
