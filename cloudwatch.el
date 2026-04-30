@@ -507,10 +507,13 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
                  (goto-char (point-min))
                  (when (search-forward "⏳ Loading logs..." nil t)
                    (replace-match (format "✓ Query complete (max %d events)" cloudwatch-query-limit)))
-                 ;; Remove EVENTS prefix from each line
+                 ;; Not all of us are an advanced AI, clean up output lines for our fellow humans
                  (goto-char (point-min))
-                 (while (re-search-forward "^EVENTS\t" nil t)
-                   (replace-match ""))
+                 (while (re-search-forward "^EVENTS\t\\([0-9]+\\)\t[^\t]*\t" nil t)
+                   (let* ((millis (string-to-number (match-string 1)))
+                          (timestamp (format-time-string "%Y-%m-%d %H:%M:%S"
+                                                         (seconds-to-time (/ millis 1000.0)))))
+                     (replace-match (concat timestamp "  "))))
                  ;; Check if we hit the limit
                  (goto-char (point-max))
                  (let ((line-count (count-lines (point-min) (point-max))))
@@ -556,7 +559,8 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
   (let* ((buffer-name (cloudwatch--extract-buffer-name cloudwatch-current-log-group 'tail))
          (filter-args (if (and cloudwatch-current-filter
                                (not (string-empty-p cloudwatch-current-filter)))
-                          (format " --filter-pattern %s" (shell-quote-argument cloudwatch-current-filter))
+                          (format " --filter-pattern %s"
+                                  (shell-quote-argument cloudwatch-current-filter))
                         ""))
          (cmd (format "aws logs tail %s --region %s --since %dm --follow --format short%s"
                       (shell-quote-argument cloudwatch-current-log-group)
@@ -568,14 +572,33 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
                                           process-environment))))
     (when (get-buffer buffer-name)
       (kill-buffer buffer-name))
-    (async-shell-command cmd buffer-name)
-    (with-current-buffer buffer-name
-      (ansi-color-for-comint-mode-on)
-      (font-lock-mode 1)
-      (cloudwatch--setup-highlighting)
-      (toggle-truncate-lines 1)
-      (goto-char (point-max))
-      (local-set-key (kbd "q") 'kill-current-buffer))))
+    (let ((output-buffer (get-buffer-create buffer-name)))
+      (with-current-buffer output-buffer
+        (erase-buffer)
+        (insert (format "Tailing: %s\nRegion: %s\nSince: %d minutes ago\n"
+                        cloudwatch-current-log-group
+                        (cloudwatch-get-region)
+                        cloudwatch-current-minutes))
+        (when (not (string-empty-p cloudwatch-current-filter))
+          (insert (format "Filter: %s\n" cloudwatch-current-filter)))
+        (insert "─────────────────────────────────────────────────\n")
+        (cloudwatch--setup-highlighting)
+        (toggle-truncate-lines 1)
+        (local-set-key (kbd "q") 'kill-current-buffer))
+      (switch-to-buffer output-buffer)
+      (let ((proc (start-process-shell-command
+                   "cloudwatch-tail"
+                   output-buffer
+                   cmd)))
+        (set-process-filter
+         proc
+         (lambda (process output)
+           (when (buffer-live-p (process-buffer process))
+             (with-current-buffer (process-buffer process)
+               (let ((inhibit-read-only t))
+                 (goto-char (point-max))
+                 (insert (ansi-color-apply output)))))))
+        (message "Tailing logs... press 'q' to stop.")))))
 
 (defun cloudwatch-do-tail-safe ()
   "Execute tail command, returning to transient on validation errors."
