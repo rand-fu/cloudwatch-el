@@ -497,11 +497,11 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
   (let* ((buffer-name (cloudwatch--extract-buffer-name cloudwatch-current-log-group 'query))
          (filter-args (if (and cloudwatch-current-filter
                                (not (string-empty-p cloudwatch-current-filter)))
-                          (format " --filter-pattern '%s'" cloudwatch-current-filter)
+                          (format " --filter-pattern %s" (shell-quote-argument cloudwatch-current-filter))
                         ""))
-         (cmd (format "aws logs filter-log-events --log-group-name '%s' --region %s --start-time %d --limit %d --output text%s"
-                      cloudwatch-current-log-group
-                      (cloudwatch-get-region)
+         (cmd (format "aws logs filter-log-events --log-group-name %s --region %s --start-time %d --limit %d --output text%s"
+                      (shell-quote-argument cloudwatch-current-log-group)
+                      (shell-quote-argument (cloudwatch-get-region))
                       (cloudwatch--start-time-millis)
                       cloudwatch-query-limit
                       filter-args))
@@ -591,11 +591,11 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
   (let* ((buffer-name (cloudwatch--extract-buffer-name cloudwatch-current-log-group 'tail))
          (filter-args (if (and cloudwatch-current-filter
                                (not (string-empty-p cloudwatch-current-filter)))
-                          (format " --filter-pattern '%s'" cloudwatch-current-filter)
+                          (format " --filter-pattern %s" (shell-quote-argument cloudwatch-current-filter))
                         ""))
-         (cmd (format "aws logs tail '%s' --region %s --since %dm --follow --format short%s"
-                      cloudwatch-current-log-group
-                      (cloudwatch-get-region)
+         (cmd (format "aws logs tail %s --region %s --since %dm --follow --format short%s"
+                      (shell-quote-argument cloudwatch-current-log-group)
+                      (shell-quote-argument (cloudwatch-get-region))
                       cloudwatch-current-minutes
                       filter-args))
          (process-environment (cons "AWS_PAGER="
@@ -650,12 +650,12 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
     (message "Starting Insights query...")
     (let* ((start-time (cloudwatch--start-time-millis))
            (end-time (cloudwatch--end-time-millis))
-           (start-cmd (format "aws logs start-query --log-group-name '%s' --region %s --start-time %d --end-time %d --query-string '%s' --output text"
-                              cloudwatch-current-log-group
-                              (cloudwatch-get-region)
+           (start-cmd (format "aws logs start-query --log-group-name %s --region %s --start-time %d --end-time %d --query-string %s --output text"
+                              (shell-quote-argument cloudwatch-current-log-group)
+                              (shell-quote-argument (cloudwatch-get-region))
                               start-time
                               end-time
-                              cloudwatch-insights-query))
+                              (shell-quote-argument cloudwatch-insights-query)))
            ;; Use our error-handling wrapper here
            (query-id-output (cloudwatch--run-aws-command start-cmd)))
       
@@ -707,8 +707,8 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
    (lambda ()
      (condition-case err
          (let* ((cmd (format "aws logs get-query-results --query-id %s --region %s --output json"
-                             query-id
-                             (cloudwatch-get-region)))
+                             (shell-quote-argument query-id)
+                             (shell-quote-argument (cloudwatch-get-region))))
                 (output (cloudwatch--run-aws-command cmd))
                 (result (and output (json-parse-string output :object-type 'alist)))
                 (status (and result (alist-get 'status result))))
