@@ -355,39 +355,6 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
         (message "No log groups found or error occurred"))))
   cloudwatch-log-groups-cache)
 
-;;;; Favorites management
-(defun cloudwatch-add-to-favorites (log-group)
-  "Add LOG-GROUP to favorites, managing duplicates and order."
-  (when (and log-group (not (string-empty-p log-group)))
-    ;; Remove if already exists (to move to front)
-    (setq cloudwatch-favorite-log-groups
-          (delete log-group cloudwatch-favorite-log-groups))
-    ;; Add to the front
-    (push log-group cloudwatch-favorite-log-groups)
-    ;; Keep only first 5 (seq-take handles short lists gracefully)
-    (setq cloudwatch-favorite-log-groups
-          (seq-take cloudwatch-favorite-log-groups 5))
-    ;; Save it
-    (customize-save-variable 'cloudwatch-favorite-log-groups
-                             cloudwatch-favorite-log-groups)
-    (message "Added to favorites: %s" (truncate-string-to-width log-group 50)))
-  (cloudwatch-transient))
-
-(defun cloudwatch-remove-from-favorites ()
-  "Remove a log group from favorites."
-  (interactive)
-  (if (null cloudwatch-favorite-log-groups)
-      (message "No favorites to remove")
-    (let ((to-remove (completing-read "Remove from favorites: "
-                                      cloudwatch-favorite-log-groups
-                                      nil t)))
-      (setq cloudwatch-favorite-log-groups
-            (delete to-remove cloudwatch-favorite-log-groups))
-      (customize-save-variable 'cloudwatch-favorite-log-groups
-                               cloudwatch-favorite-log-groups)
-      (message "Removed: %s" to-remove)))
-  (cloudwatch-transient))
-
 ;;;; Settings functions for Transient
 (defun cloudwatch-set-region ()
   "Set AWS region."
@@ -942,14 +909,7 @@ Only available in relative time mode."
       (if cloudwatch-current-log-group
           (cloudwatch-add-to-favorites cloudwatch-current-log-group)
         (message "No log group selected"))))
-   ("d" "Remove from favorites" cloudwatch-remove-from-favorites)
-   ("C" "Clear all favorites"
-    (lambda () (interactive)
-      (when (yes-or-no-p "Clear all favorites? ")
-        (setq cloudwatch-favorite-log-groups nil)
-        (customize-save-variable 'cloudwatch-favorite-log-groups nil)
-        (message "Favorites cleared"))
-      (cloudwatch-transient)))]
+   ("d" "Remove from favorites" cloudwatch-remove-from-favorites)]
   ["Actions"
    [("t" "Tail: Live streaming logs with filters" cloudwatch-do-tail-safe :transient nil)
     ("Q" "Query: Snapshot search with filters" cloudwatch-do-query-safe :transient nil)

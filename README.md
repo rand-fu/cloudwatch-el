@@ -118,7 +118,8 @@ M-x cloudwatch RET
 ## Configuration 
 
 ### Favorites
-Save frequently accessed log groups:
+Favorites added via the transient menu (`a`) are session-only. 
+To persist them across sessions, set the variable in your config:
 
 ```elisp
 (setq cloudwatch-favorite-log-groups
