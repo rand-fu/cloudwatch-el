@@ -102,6 +102,12 @@ These are base widths - `cloudwatch-wide-mode' can double message fields."
   :type '(alist :key-type string :value-type string)
   :group 'cloudwatch)
 
+;; If an Insights query gets stuck in "Running" state which AWS does sometimes, the timer chain never stops. If a user kills the buffer while "running", the timer fires into a dead buffer and errors out.
+(defcustom cloudwatch-insights-poll-timeout 120
+  "Maximum seconds to poll for Insights query results before giving up."
+  :type 'integer
+  :group 'cloudwatch)
+
 ;;;; Internal vars
 (defvar cloudwatch-current-region nil
   "Currently active AWS region for CloudWatch operations.
@@ -700,59 +706,70 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
      (user-error "Please set an Insights query first"))
    (cloudwatch-do-insights-query)))
 
-(defun cloudwatch-insights-poll-results (query-id buffer)
-  "Poll for Insights QUERY-ID results in BUFFER."
-  (run-with-timer
-   1 nil
-   (lambda ()
-     (condition-case err
-         (let* ((cmd (format "aws logs get-query-results --query-id %s --region %s --output json"
-                             (shell-quote-argument query-id)
-                             (shell-quote-argument (cloudwatch-get-region))))
-                (output (cloudwatch--run-aws-command cmd))
-                (result (and output (json-parse-string output :object-type 'alist)))
-                (status (and result (alist-get 'status result))))
-           (cond
-            ((null result)
-             (with-current-buffer buffer
-               (let ((inhibit-read-only t))
-                 (goto-char (point-min))
-                 (when (search-forward "⏳ Query running..." nil t)
-                   (replace-match "Query failed - could not get results"))))
-             (message "Insights query failed"))
-            
-            ((string= status "Complete")
-             (with-current-buffer buffer
-               (let ((inhibit-read-only t))
-                 (save-excursion
-                   (goto-char (point-min))
-                   (search-forward "⏳ Query running..." nil t)
-                   (replace-match "✓ Query complete!"))
-                 (goto-char (point-max))
-                 (insert "\n")
-                 (cloudwatch-insights-format-results (alist-get 'results result))
-                 (read-only-mode 1)
-                 (cloudwatch-insights-results-mode 1)
-                 (cloudwatch--setup-highlighting)
-                 (message "Insights query complete!"))))
-            
-            ((string= status "Failed")
-             (with-current-buffer buffer
-               (let ((inhibit-read-only t))
-                 (goto-char (point-min))
-                 (when (search-forward "⏳ Query running..." nil t)
-                   (replace-match "Query failed!")))
-               (message "Insights query failed!")))
-            
-            (t ; Still running
-             (cloudwatch-insights-poll-results query-id buffer))))
-       (error
-        (with-current-buffer buffer
-          (let ((inhibit-read-only t))
-            (goto-char (point-min))
-            (when (search-forward "⏳ Query running..." nil t)
-              (replace-match (format "Error: %s" (error-message-string err))))))
-        (message "Insights query error: %s" (error-message-string err)))))))
+(defun cloudwatch-insights-poll-results (query-id buffer &optional start-time)
+  "Poll for Insights QUERY-ID results in BUFFER.
+START-TIME tracks when polling began for timeout detection."
+  (let ((start-time (or start-time (float-time))))
+    (run-with-timer
+     2 nil
+     (lambda ()
+       (cond
+        ;; Buffer killed, silently abandon it, no one cares
+        ((not (buffer-live-p buffer))
+         (message "Query buffer closed, abandoning poll"))
+
+        ;; Timeout so we don't create an unbound timer chain and rip a hole in space-time
+        ((> (- (float-time) start-time) cloudwatch-insights-poll-timeout)
+         (with-current-buffer buffer
+           (let ((inhibit-read-only t))
+             (goto-char (point-min))
+             (when (search-forward "⏳ Query running..." nil t)
+               (replace-match (format "⏱ Timed out after %ds (query may still be running on AWS)"
+                                      cloudwatch-insights-poll-timeout)))))
+         (message "Insights query polling timed out"))
+
+        ;; Polling normally with out a time paradox
+        (t
+         (condition-case err
+             (let* ((cmd (format "aws logs get-query-results --query-id %s --region %s --output json"
+                                 (shell-quote-argument query-id)
+                                 (shell-quote-argument (cloudwatch-get-region))))
+                    (output (cloudwatch--run-aws-command cmd))
+                    (result (and output (json-parse-string output :object-type 'alist)))
+                    (status (and result (alist-get 'status result))))
+               (pcase status
+                 ("Complete"
+                  (with-current-buffer buffer
+                    (let ((inhibit-read-only t))
+                      (save-excursion
+                        (goto-char (point-min))
+                        (search-forward "⏳ Query running..." nil t)
+                        (replace-match "✓ Query complete!"))
+                      (goto-char (point-max))
+                      (insert "\n")
+                      (cloudwatch-insights-format-results (alist-get 'results result))
+                      (read-only-mode 1)
+                      (cloudwatch-insights-results-mode 1)
+                      (cloudwatch--setup-highlighting)
+                      (message "Insights query complete!"))))
+
+                 ("Failed"
+                  (with-current-buffer buffer
+                    (let ((inhibit-read-only t))
+                      (goto-char (point-min))
+                      (when (search-forward "⏳ Query running..." nil t)
+                        (replace-match "✗ Query failed!")))
+                    (message "Insights query failed!")))
+
+                 ((or "Running" "Scheduled" `nil)
+                  (cloudwatch-insights-poll-results query-id buffer start-time))))
+           (error
+            (with-current-buffer buffer
+              (let ((inhibit-read-only t))
+                (goto-char (point-min))
+                (when (search-forward "⏳ Query running..." nil t)
+                  (replace-match (format "Error: %s" (error-message-string err))))))
+            (message "Insights query error: %s" (error-message-string err))))))))))
 
 (defun cloudwatch-insights-format-results (results)
   "Format Insights RESULTS for display.
@@ -821,7 +838,7 @@ Uses buffer-local `cloudwatch-insights-query-info' for metadata."
                           (value (alist-get 'value item)))
                       (insert (propertize (format "%s:\n" field)
                                           'face 'font-lock-keyword-face))
-                      ;; Pretty-print JSON if detected
+                      ;; Pretty-print JSON if detected because no one likes ugly JSON
                       (if (and value
                                (string-match "^[[:space:]]*[{\\[]" value))
                           (condition-case nil
