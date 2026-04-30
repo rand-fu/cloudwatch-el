@@ -335,14 +335,6 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
     (format "Last %d minutes" cloudwatch-current-minutes)))
 
 ;;;; AWS CLI operations
-(defun cloudwatch-check-aws-cli ()
-  "Check if AWS CLI is installed and configured."
-  (unless (executable-find "aws")
-    (user-error "AWS CLI not found. Please install aws-cli"))
-  (when (string-match "Unable to locate credentials"
-                      (shell-command-to-string "aws sts get-caller-identity 2>&1"))
-    (user-error "AWS credentials not configured")))
-
 (defun cloudwatch-list-log-groups (&optional refresh)
   "List all log groups in current region. Use cache unless REFRESH is true."
   (when (or refresh
@@ -984,7 +976,8 @@ Only available in relative time mode."
 (defun cloudwatch ()
   "Open CloudWatch logs viewer."
   (interactive)
-  (cloudwatch-check-aws-cli)
+  (unless (executable-find "aws")
+    (user-error "AWS CLI not found. Please install aws-cli"))
   (cloudwatch-transient))
 
 (provide 'cloudwatch)
