@@ -581,10 +581,12 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
                         cloudwatch-current-minutes))
         (when (not (string-empty-p cloudwatch-current-filter))
           (insert (format "Filter: %s\n" cloudwatch-current-filter)))
+        (insert "Keys: s=stop tailing  q=close buffer\n")
         (insert "─────────────────────────────────────────────────\n")
         (cloudwatch--setup-highlighting)
         (toggle-truncate-lines 1)
-        (local-set-key (kbd "q") 'kill-current-buffer))
+        (local-set-key (kbd "q") 'kill-current-buffer)
+        (local-set-key (kbd "s") 'cloudwatch-stop-tail))
       (switch-to-buffer output-buffer)
       (let ((proc (start-process-shell-command
                    "cloudwatch-tail"
@@ -598,7 +600,12 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
                (let ((inhibit-read-only t))
                  (goto-char (point-max))
                  (insert (ansi-color-apply output)))))))
-        (message "Tailing logs... press 'q' to stop.")))))
+        (set-process-sentinel
+         proc
+         (lambda (_process _event)
+           ;; Silently handle process exit since we manage our own messaging
+           nil))
+        (message "Tailing logs... press 's' to stop, 'q' to quit.")))))
 
 (defun cloudwatch-do-tail-safe ()
   "Execute tail command, returning to transient on validation errors."
@@ -607,6 +614,29 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
    (unless cloudwatch-current-log-group
      (user-error "Please select a log group first"))
    (cloudwatch-do-tail)))
+
+;; Provide an intuitive way to stop the log stream without killing the buffer.
+(defun cloudwatch-stop-tail ()
+  "Stop the tail process in the current buffer without killing it."
+  (interactive)
+  (let ((proc (get-buffer-process (current-buffer)))
+        (buf (current-buffer)))
+    (if proc
+        (progn
+          (interrupt-process proc)
+          ;; NOTE: If the stop message gets inserted immediately there may still be output in the process buffer that hasn't been flushed yet. A short delay lets the remaining output land first. The buf capture is necessary because by the time the timer fires, current-buffer could be anything. The buffer-live-p guard handles the case where the user kills the buffer in that half second.
+          (run-with-timer
+           0.5 nil
+           (lambda ()
+             (when (buffer-live-p buf)
+               (with-current-buffer buf
+                 (let ((inhibit-read-only t))
+                   (goto-char (point-max))
+                   (insert "\n─────────────────────────────────────────────────\n"
+                           "Tail stopped. Buffer preserved for inspection.\n"
+                           "Press 'q' to close buffer.\n"))))))
+          (message "Tail stopped. Buffer preserved for inspection."))
+      (message "No active tail process in this buffer."))))
 
 ;;;; Insights query operations
 (defun cloudwatch-set-insights-query ()
