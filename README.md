@@ -118,7 +118,8 @@ M-x cloudwatch RET
 ## Configuration 
 
 ### Favorites
-Save frequently accessed log groups:
+Favorites added via the transient menu (`a`) are session-only. 
+To persist them across sessions, set the variable in your config:
 
 ```elisp
 (setq cloudwatch-favorite-log-groups
@@ -160,7 +161,7 @@ The default mode is relative (minutes back). Absolute time ranges are set per-se
 
 ## Usage
 
-- `SPC o c` - Open CloudWatch transient menu (Doom Emacs)
+- `SPC o C` - Open CloudWatch transient menu (Doom Emacs)
 - `M-x cloudwatch` - Vanilla and anything else
 
 ## Transient Commands
@@ -180,7 +181,7 @@ The default mode is relative (minutes back). Absolute time ranges are set per-se
 ### Quick Filters
 - `E` - Filter errors only
 - `W` - Filter warnings
-- `5` - Filter 5xx errors
+- `x` - Filter 5xx errors
 - `n` - Filter by Kubernetes namespace
 - `p` - Filter by pod name
 - `c` - Clear all filters
