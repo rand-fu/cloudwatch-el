@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 1.0.0
+
+### Features
+
+This release represents a lot of polish and things I've learned after writing and using this package exclusively for several months. I can't tell you the last time I looked at CloudWatch in the console. I hope you find it as useful and enjoy it as much as I do.W
+
+- **Transient-based interface** — Full interactive menu for navigating CloudWatch settings, queries, and actions via `M-x cloudwatch`
+- **Live log tailing** — Stream logs in real-time with `aws logs tail --follow`, stoppable without killing the buffer
+- **Snapshot queries** — Retrieve historical log events with configurable result limits and async execution
+- **CloudWatch Insights support** — Run advanced SQL-like queries with aggregations, time series, sorting, and field extraction
+- **Insights presets** — Ship with common query templates (error counts, slow requests, request rate, pod restarts, etc.) and support user-defined presets
+- **Insights detail view** — Press RET on any result row to view the full record with pretty-printed JSON
+- **Filter patterns** — Simple text matching, JSON field filters, and quick presets for errors, warnings, 5xx status codes, Kubernetes namespaces, and pod names
+- **Time range selection** — Relative mode (minutes back from now) or absolute mode (start/end date range in local timezone)
+- **Region switching** — Change AWS regions on the fly with automatic cache invalidation
+- **Favorites management** — Quick-access numbered shortcuts for up to 5 favorite log groups, with add/remove from the transient menu
+- **Log groups browser** — Fetch and browse all available log groups in the current region with completion, backed by a 10-minute cache
+- **Syntax highlighting** — Automatic colorization for ERROR, FATAL, WARN, INFO, and DEBUG levels, plus JSON keys and timestamps
+- **Async operations** — All AWS CLI calls run asynchronously to keep Emacs responsive
+- **Wide mode** — Toggle doubled column widths for message fields in Insights results
+- **Adjustable query limits** — Increase or decrease result limits on the fly with `+` and `-` in result buffers
+- **Insights time expansion** — Double the query time range and rerun with `+` in Insights result buffers
+- **Multiline query input** — Enter complex Insights queries with RET for newlines and C-c C-c to submit
+- **Polling timeout** — Configurable timeout for Insights query polling to prevent runaway timer chains
+- **Error handling** — Friendly messages for missing credentials, expired tokens, access denied, rate limits, and invalid parameters
+- **Doom Emacs integration** — Optional `cloudwatch-doom.el` module binding `SPC o C` to the CloudWatch interface
+
+### Configuration
+
+- `cloudwatch-default-region` — Default AWS region
+- `cloudwatch-favorite-log-groups` — Persistable list of frequently used log groups
+- `cloudwatch-query-limit` — Maximum events for basic queries (default 2500)
+- `cloudwatch-insights-column-widths` — Per-field column widths for Insights result tables
+- `cloudwatch-insights-presets` — User-extensible alist of named Insights query templates
+- `cloudwatch-insights-poll-timeout` — Maximum seconds to wait for Insights results (default 120)
 ## 0.6.0 
 
 ### Added
