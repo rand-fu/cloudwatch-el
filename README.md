@@ -161,7 +161,7 @@ The default mode is relative (minutes back). Absolute time ranges are set per-se
 
 ## Usage
 
-- `SPC o c` - Open CloudWatch transient menu (Doom Emacs)
+- `SPC o C` - Open CloudWatch transient menu (Doom Emacs)
 - `M-x cloudwatch` - Vanilla and anything else
 
 ## Transient Commands

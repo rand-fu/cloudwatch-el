@@ -9,7 +9,7 @@
 ;; Version: 0.6.0
 ;; Keywords: tools aws cloudwatch logs monitoring devops kubernetes observability
 ;; Homepage: https://github.com/rand-fu/cloudwatch-el
-;; Package-Requires: ((emacs "27.1") (transient "0.3.0"))
+;; Package-Requires: ((emacs "29.1"))
 ;;
 ;; This file is not part of GNU Emacs.
 ;;
@@ -267,7 +267,6 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
 (defun cloudwatch--setup-highlighting ()
   "Setup common highlighting patterns."
   (font-lock-mode 1)
-  ;; Use font-lock-add-keywords instead of highlight-regexp
   (font-lock-add-keywords nil
                           '(("\\bERROR\\b\\|\"ERROR\"\\|\"error\"\\|:ERROR:\\|\\[ERROR\\]" . 'hi-red-b)
                             ("\\bFATAL\\b\\|\"FATAL\"\\|\"fatal\"\\|\\[FATAL\\]" . 'hi-red-b)
@@ -915,11 +914,7 @@ Only available in relative time mode."
       (cloudwatch-rerun-insights)))))
 
 (define-derived-mode cloudwatch-detail-mode special-mode "CW-Detail"
-  "Mode for viewing CloudWatch log entry details."
-  (setq-local revert-buffer-function
-              (lambda (_ignore-auto _noconfirm)
-                (when (boundp 'cloudwatch-insights-show-detail)
-                  (call-interactively 'cloudwatch-insights-show-detail)))))
+  "Mode for viewing CloudWatch log entry details.")
 
 ;;;; Transient magic
 (transient-define-prefix cloudwatch-transient ()
