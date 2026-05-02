@@ -181,7 +181,7 @@ The default mode is relative (minutes back). Absolute time ranges are set per-se
 ### Quick Filters
 - `E` - Filter errors only
 - `W` - Filter warnings
-- `5` - Filter 5xx errors
+- `x` - Filter 5xx errors
 - `n` - Filter by Kubernetes namespace
 - `p` - Filter by pod name
 - `c` - Clear all filters

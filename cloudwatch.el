@@ -162,6 +162,15 @@ Used to determine if cache needs refresh (10 minute expiry).")
     map)
   "Keymap for CloudWatch Insights results.")
 
+(defvar cloudwatch-multiline-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map minibuffer-local-map)
+    (define-key map (kbd "C-c C-c") #'exit-minibuffer)
+    (define-key map (kbd "RET") #'newline)
+    map)
+  "Keymap for multiline query input.
+RET inserts a newline, \\[cloudwatch-multiline-map] submits.")
+
 ;;;; Buffer locals
 (defvar-local cloudwatch-insights-query-info nil
   "Buffer-local storage for Insights query metadata and parameters.
@@ -333,6 +342,16 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
               (format-time-string "%Y-%m-%d %H:%M" cloudwatch-start-time)
               (format-time-string "%Y-%m-%d %H:%M" cloudwatch-end-time))
     (format "Last %d minutes" cloudwatch-current-minutes)))
+
+(defun cloudwatch--read-multiline (prompt &optional initial)
+  "Read a multiline string from the minibuffer.
+PROMPT is displayed.  INITIAL is the starting text.
+RET inserts a newline.  \\[cloudwatch--read-multiline] submits."
+  (let ((result (read-from-minibuffer
+                 (concat prompt " (RET=newline, C-c C-c=submit): ")
+                 initial
+                 cloudwatch-multiline-map)))
+    (string-trim result)))
 
 ;;;; AWS CLI operations
 (defun cloudwatch-list-log-groups (&optional refresh)
@@ -509,7 +528,7 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
                    (replace-match (format "✓ Query complete (max %d events)" cloudwatch-query-limit)))
                  ;; Not all of us are an advanced AI, clean up output lines for our fellow humans
                  (goto-char (point-min))
-                 (while (re-search-forward "^EVENTS\t\\([0-9]+\\)\t[^\t]*\t" nil t)
+                 (while (re-search-forward "^EVENTS\t[^\t]*\t\\([0-9]+\\)\t[^\t]*\t" nil t)
                    (let* ((millis (string-to-number (match-string 1)))
                           (timestamp (format-time-string "%Y-%m-%d %H:%M:%S"
                                                          (seconds-to-time (/ millis 1000.0)))))
@@ -651,9 +670,8 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
                                    nil t nil 'cloudwatch-insights-history)))
      (setq cloudwatch-insights-query
            (if (string= choice "Custom query")
-               (read-string "Enter Insights query: "
-                            cloudwatch-insights-query
-                            'cloudwatch-insights-history)
+               (cloudwatch--read-multiline "Insights query"
+                                           cloudwatch-insights-query)
              (cdr (assoc choice choices)))))
    (cloudwatch-transient)))
 
@@ -664,7 +682,7 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
                               (cloudwatch-get-region)
                               (car (last (split-string cloudwatch-current-log-group "/") 2))))
          (output-buffer (get-buffer-create buffer-name)))
-    
+
     (message "Starting Insights query...")
     (let* ((start-time (cloudwatch--start-time-millis))
            (end-time (cloudwatch--end-time-millis))
@@ -676,15 +694,15 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
                               (shell-quote-argument cloudwatch-insights-query)))
            ;; Use our error-handling wrapper here
            (query-id-output (cloudwatch--run-aws-command start-cmd)))
-      
+
       ;; Check if we got a valid query ID back
       (unless query-id-output
         (user-error "Failed to start Insights query"))
-      
+
       (let ((query-id (string-trim query-id-output)))
         (when (string-empty-p query-id)
           (user-error "Failed to start Insights query - empty response"))
-        
+
         (with-current-buffer output-buffer
           (let ((inhibit-read-only t))
             (erase-buffer)
@@ -701,9 +719,9 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
             (insert (format "Query: %s\n" cloudwatch-insights-query))
             (insert "─────────────────────────────────\n")
             (insert "⏳ Query running...\n")))
-        
+
         (switch-to-buffer output-buffer)
-        
+
         ;; Poll for results
         (cloudwatch-insights-poll-results query-id output-buffer)))))
 
@@ -791,7 +809,7 @@ Uses buffer-local `cloudwatch-insights-query-info' for metadata."
       (insert (propertize "No results found.\n" 'face 'font-lock-comment-face))
     ;; Store results for detail view
     (setq-local cloudwatch-insights-results results)
-    
+
     ;; Get field names from first result
     (let ((fields (mapcar (lambda (item) (alist-get 'field item)) (aref results 0))))
       ;; Get column widths dynamically
@@ -828,7 +846,7 @@ Uses buffer-local `cloudwatch-insights-query-info' for metadata."
                                                  (define-key map (kbd "RET") 'cloudwatch-insights-show-detail)
                                                  map)
                                        'help-echo "Press RET to view full record")))))))
-  
+
   (insert "\n" (propertize "Keys: RET=details  g=refresh  +=expand time  q=quit"
                            'face 'font-lock-comment-face)))
 
@@ -843,7 +861,7 @@ Uses buffer-local `cloudwatch-insights-query-info' for metadata."
           (let ((inhibit-read-only t))
             (erase-buffer)
             (insert (propertize "═══ CloudWatch Log Entry Detail ═══\n\n" 'face 'bold))
-            
+
             ;; Show all fields with full content
             (mapc (lambda (item)
                     (let ((field (alist-get 'field item))
@@ -863,7 +881,7 @@ Uses buffer-local `cloudwatch-insights-query-info' for metadata."
                         (insert (or value "null")))
                       (insert "\n\n")))
                   row)
-            
+
             (goto-char (point-min))
             (cloudwatch-detail-mode))
           (pop-to-buffer (current-buffer)))))))
@@ -960,7 +978,12 @@ Only available in relative time mode."
    ("a" "Add current to favorites"
     (lambda () (interactive)
       (if cloudwatch-current-log-group
-          (cloudwatch-add-to-favorites cloudwatch-current-log-group)
+          (progn
+            (unless (member cloudwatch-current-log-group cloudwatch-favorite-log-groups)
+              (push cloudwatch-current-log-group cloudwatch-favorite-log-groups))
+            (message "Added to session favorites: %s"
+                     (truncate-string-to-width cloudwatch-current-log-group 50))
+            (cloudwatch-transient))
         (message "No log group selected"))))
    ("d" "Remove from favorites" cloudwatch-remove-from-favorites)]
   ["Actions"
