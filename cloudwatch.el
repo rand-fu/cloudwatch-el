@@ -6,7 +6,7 @@
 ;; Maintainer: Randol Reeves <randol.reeves+emacs@gmail.com>
 ;; Created: November 04, 2025
 ;; Modified: May 01, 2026
-;; Version: 1.0.0
+;; Version: 1.0.1
 ;; Keywords: tools aws cloudwatch logs monitoring devops kubernetes observability
 ;; Homepage: https://github.com/rand-fu/cloudwatch-el
 ;; Package-Requires: ((emacs "29.1"))
@@ -345,12 +345,16 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
 (defun cloudwatch--read-multiline (prompt &optional initial)
   "Read a multiline string from the minibuffer.
 PROMPT is displayed.  INITIAL is the starting text.
-RET inserts a newline.  \\[cloudwatch--read-multiline] submits."
-  (let ((result (read-from-minibuffer
-                 (concat prompt " (RET=newline, C-c C-c=submit): ")
-                 initial
-                 cloudwatch-multiline-map)))
-    (string-trim result)))
+RET inserts a newline.  \\<cloudwatch-multiline-map>\\[exit-minibuffer] submits.
+History is stored in `cloudwatch-insights-history', and mildly deduped."
+  (let ((history-delete-duplicates t))
+    (string-trim
+     (read-from-minibuffer
+      (concat prompt " (RET=newline, C-c C-c=submit): ")
+      initial
+      cloudwatch-multiline-map
+      nil
+      'cloudwatch-insights-history))))
 
 ;;;; AWS CLI operations
 (defun cloudwatch-list-log-groups (&optional refresh)
@@ -980,7 +984,8 @@ Only available in relative time mode."
                      (truncate-string-to-width cloudwatch-current-log-group 50))
             (cloudwatch-transient))
         (message "No log group selected"))))
-   ("d" "Remove from favorites" cloudwatch-remove-from-favorites)]
+   ;; ("d" "Remove from favorites" cloudwatch-remove-from-favorites)
+   ]
   ["Actions"
    [("t" "Tail: Live streaming logs with filters" cloudwatch-do-tail-safe :transient nil)
     ("Q" "Query: Snapshot search with filters" cloudwatch-do-query-safe :transient nil)

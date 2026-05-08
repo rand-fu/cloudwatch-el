@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 1.0.1
+
+### Fixed 
+
+- Removed and unused transient prefix key for favorites management that I accidentally left in when dropping support for it.
+- `cloudwatch--read-multiline` now shows just your recent query history and not the entire mini buffer history. 
+
 ## 1.0.0
 
 ### Features
@@ -42,6 +49,7 @@ This release represents a lot of polish and things I've learned after writing an
 - `cloudwatch-insights-column-widths` — Per-field column widths for Insights result tables
 - `cloudwatch-insights-presets` — User-extensible alist of named Insights query templates
 - `cloudwatch-insights-poll-timeout` — Maximum seconds to wait for Insights results (default 120)
+
 ## 0.6.0 
 
 ### Added
