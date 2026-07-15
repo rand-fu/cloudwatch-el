@@ -230,7 +230,7 @@ T                         ; Set time range
 I                         ; Run Insights query
 ```
 
-Times are entered in your local timezone — Emacs handles the UTC conversion automatically. Press `C-t` in the transient to switch back to relative mode.
+Times are entered in your local timezone. Emacs handles the UTC conversion automatically. Press `C-t` in the transient to switch back to relative mode.
 
 ### CloudWatch Insights Queries
 

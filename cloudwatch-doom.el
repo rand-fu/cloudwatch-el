@@ -5,11 +5,11 @@
 ;; Author: Randol Reeves <randol.reeves+emacs@gmail.com>
 ;; Maintainer: Randol Reeves <randol.reeves+emacs@gmail.com>
 ;; Created: November 04, 2025
-;; Modified: March 10, 2026
-;; Version: 1.0.1
+;; Modified: July 15, 2026
+;; Version: 1.0.2
 ;; Keywords: tools aws cloudwatch logs monitoring devops kubernetes observability
 ;; Homepage: https://github.com/rand-fu/cloudwatch-el
-;; Package-Requires: ((emacs "29.1") (cloudwatch "1.0.1"))
+;; Package-Requires: ((emacs "29.1") (cloudwatch "1.0.2"))
 ;;
 ;; This file is not part of GNU Emacs.
 ;;
@@ -34,8 +34,11 @@
 
 (require 'cloudwatch)
 
+;; This DOOM commit https://github.com/doomemacs/core/commit/635bc939d3cb835873d7039a6505d78cdb99d313
+;; introduces a breaking change that causes the below to break using the "o" prefix.
+;; Rework it to fit the new pattern
 (map! :leader
-      (:prefix ("o" . "open")
+      (:prefix "o"
        :desc "CloudWatch" "C" #'cloudwatch))
 
 (provide 'cloudwatch-doom)

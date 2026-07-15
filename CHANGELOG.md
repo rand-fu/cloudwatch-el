@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed 
 
+- Doom now interprets the `("o" . "open")` label form as "bind `SPC o` to a fresh `(cons "open" (make-sparse-keymap))`"*, which *wipes out* everything already bound under`SPC o` (`find-file`, `projectile-find-file`, all the Doom-provided "open" bindings, etc.). Then it binds your `C` inside that new empty keymap.
+
+  Since `SPC o` is already labeled "open" upstream by Doom, we don't need to relabel it. 
+
+## 1.0.1
+
+### Fixed 
+
 - Removed and unused transient prefix key for favorites management that I accidentally left in when dropping support for it.
 - `cloudwatch--read-multiline` now shows just your recent query history and not the entire mini buffer history. 
 
