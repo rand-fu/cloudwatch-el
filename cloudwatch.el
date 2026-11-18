@@ -5,8 +5,8 @@
 ;; Author: Randol Reeves <randol.reeves+emacs@gmail.com>
 ;; Maintainer: Randol Reeves <randol.reeves+emacs@gmail.com>
 ;; Created: November 04, 2025
-;; Modified: May 01, 2026
-;; Version: 1.0.1
+;; Modified: November 18, 2026
+;; Version: 1.1.0
 ;; Keywords: tools aws cloudwatch logs monitoring devops kubernetes observability
 ;; Homepage: https://github.com/rand-fu/cloudwatch-el
 ;; Package-Requires: ((emacs "29.1"))
@@ -26,6 +26,7 @@
 ;; - Live log tailing with automatic updates
 ;; - Snapshot queries for historical log analysis
 ;; - CloudWatch Insights support for advanced queries and aggregations
+;; - Multi-log-group Insights queries (up to 50 groups)
 ;; - Filter patterns with quick presets for common searches
 ;; - Relative (minutes back) or absolute (date range) time selection
 ;; - Region switching for multi-region deployments
@@ -45,6 +46,8 @@
 (require 'transient)
 (require 'ansi-color)
 (require 'json) ;; for json-pretty-print
+(require 'cl-lib)
+(require 'seq)
 
 ;;;; Customization group
 (defgroup cloudwatch nil
@@ -143,6 +146,19 @@ Used to determine if cache needs refresh (10 minute expiry).")
 (defvar cloudwatch-insights-query nil
   "Current CloudWatch Insights query string.")
 
+(defvar cloudwatch-insights-log-groups nil
+  "Log groups for Insights queries.
+When nil, Insights uses `cloudwatch-current-log-group'.")
+
+(defvar cloudwatch-insights-groups-history nil
+  "History for Insights log group selection.")
+
+(defconst cloudwatch--insights-max-log-groups 50
+  "Maximum log groups per Insights query (AWS limit).")
+
+(defconst cloudwatch--insights-running-marker "⏳ Query running..."
+  "Status placeholder replaced when an Insights query finishes.")
+
 (defvar cloudwatch-time-mode 'relative
   "Time selection mode: `relative' (minutes back) or `absolute' (date range).")
 
@@ -179,6 +195,10 @@ Used for refreshing queries with \='g\=' and expanding time range with \='G\='."
 (defvar-local cloudwatch-insights-results nil
   "Buffer-local storage for Insights query results.")
 
+(defvar-local cloudwatch--insights-run nil
+  "Token for the active Insights run in this buffer.
+Callbacks from older runs compare against it and bail out.")
+
 ;; Because we do care about UX in Emacs!
 (defmacro cloudwatch-with-transient-fallback (&rest body)
   "Execute BODY, returning to transient menu on user-error or quit.
@@ -205,31 +225,70 @@ validation fails or user cancels, instead of leaving them stranded."
   (or cloudwatch-current-region
       (setq cloudwatch-current-region cloudwatch-default-region)))
 
-;; An attempt at error handling - this could be too restrictive?
-(defun cloudwatch--run-aws-command (cmd &optional silent)
-  "Run AWS CLI CMD and return output, handling errors gracefully.
-If SILENT is non-nil, don't show error messages for expected failures."
-  (let ((output (shell-command-to-string (concat cmd " 2>&1"))))
-    (cond
-     ((string-match "Unable to locate credentials" output)
-      (user-error "AWS credentials not configured. Run 'aws configure' or set environment variables"))
-     ((string-match "ExpiredToken" output)
-      (user-error "AWS session token expired. Please refresh your credentials"))
-     ((string-match "AccessDenied\\|UnauthorizedAccess" output)
-      (user-error "Access denied. Check your IAM permissions for CloudWatch Logs"))
-     ((string-match "ResourceNotFoundException" output)
-      (unless silent
-        (user-error "Log group not found: %s" cloudwatch-current-log-group))
-      nil)
-     ((string-match "InvalidParameterException\\|ValidationException" output)
-      (user-error "Invalid query or parameters: %s"
+;; Error classification shared by the sync and async paths.
+(defun cloudwatch--aws-error (output)
+  "Classify AWS CLI OUTPUT.
+Return nil if no known error, else (TYPE . MESSAGE)."
+  (cond
+   ((string-match-p "Unable to locate credentials" output)
+    '(auth . "AWS credentials not configured. Run 'aws configure' or set environment variables"))
+   ((string-match-p "ExpiredToken" output)
+    '(auth . "AWS session token expired. Please refresh your credentials"))
+   ((string-match-p "AccessDenied\\|UnauthorizedAccess" output)
+    '(auth . "Access denied. Check your IAM permissions for CloudWatch Logs"))
+   ((string-match-p "ResourceNotFoundException" output)
+    (cons 'not-found
+          (format "Log group not found: %s"
+                  (if (string-match "ResourceNotFoundException[^:]*:\\s-*\\([^\n]+\\)" output)
+                      (match-string 1 output)
+                    "check region and log group names"))))
+   ((string-match-p "InvalidParameterException\\|ValidationException\\|MalformedQueryException" output)
+    (cons 'invalid
+          (format "Invalid query or parameters: %s"
                   (if (string-match "message.*?:\\s-*\\([^\n]+\\)" output)
                       (match-string 1 output)
-                    output)))
-     ((string-match "ThrottlingException\\|LimitExceededException" output)
-      (user-error "AWS rate limit exceeded. Please wait and try again"))
-     ;; Success - return the output
-     (t output))))
+                    (string-trim output)))))
+   ((string-match-p "ThrottlingException\\|LimitExceededException" output)
+    '(throttle . "AWS rate limit exceeded. Please wait and try again"))))
+
+(defun cloudwatch--run-aws-command (cmd &optional silent)
+  "Run AWS CLI CMD synchronously and return output.
+Signal `user-error' on known failures.  If SILENT is non-nil,
+return nil for not-found instead of signalling."
+  (let* ((output (shell-command-to-string (concat cmd " 2>&1")))
+         (err (cloudwatch--aws-error output)))
+    (cond
+     ((null err) output)
+     ((and silent (eq (car err) 'not-found)) nil)
+     (t (user-error "%s" (cdr err))))))
+
+(defun cloudwatch--aws-async (args callback)
+  "Run `aws' with ARGS asynchronously and call CALLBACK when done.
+CALLBACK receives (OUTPUT ERR).  On success ERR is nil; on
+failure OUTPUT is nil and ERR is a message string."
+  (let ((buf (generate-new-buffer " *cloudwatch-aws*"))
+        (process-environment (append '("AWS_PAGER=" "TERM=dumb")
+                                     process-environment)))
+    (make-process
+     :name "cloudwatch-aws"
+     :buffer buf
+     :command (cons "aws" args)
+     :connection-type 'pipe
+     :noquery t
+     :sentinel
+     (lambda (proc _event)
+       (unless (process-live-p proc)
+         (let ((output (with-current-buffer buf (buffer-string)))
+               (status (process-exit-status proc)))
+           (kill-buffer buf)
+           ;; Only classify output on failure: successful results may
+           ;; contain strings like "AccessDenied" in log content.
+           (if (zerop status)
+               (funcall callback output nil)
+             (funcall callback nil
+                      (or (cdr (cloudwatch--aws-error output))
+                          (format "aws exited with %d: %s"
+                                  status (string-trim output)))))))))))
 
 (defun cloudwatch--get-column-width (field)
   "Get the display width for FIELD name.
@@ -243,26 +302,50 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
         (* base-width 2)
       base-width)))
 
+(defun cloudwatch--group-label (log-group)
+  "Return a short, readable label for LOG-GROUP."
+  (cond
+   ((string-match "/aws/containerinsights/\\([^/]+\\)/\\([^/]+\\)" log-group)
+    (format "%s-%s" (match-string 1 log-group) (match-string 2 log-group)))
+   ((string-match "/aws/lambda/\\([^/]+\\)" log-group)
+    (format "lambda-%s" (match-string 1 log-group)))
+   (t (string-join (last (split-string log-group "/") 2) "-"))))
+
 (defun cloudwatch--extract-buffer-name (log-group &optional mode)
   "Extract meaningful buffer name from LOG-GROUP path and optional MODE."
-  (let ((prefix (if (eq mode 'query) "CW-Query" "CW")))
+  (format "*%s:%s:%s*"
+          (if (eq mode 'query) "CW-Query" "CW")
+          (cloudwatch-get-region)
+          (cloudwatch--group-label log-group)))
+
+(defun cloudwatch--insights-groups ()
+  "Return the log groups for the next Insights query."
+  (or cloudwatch-insights-log-groups
+      (and cloudwatch-current-log-group
+           (list cloudwatch-current-log-group))))
+
+(defun cloudwatch--insights-groups-description ()
+  "Transient description of the Insights log groups."
+  (let ((groups (cloudwatch--insights-groups)))
     (cond
-     ((string-match "/aws/containerinsights/\\([^/]+\\)/\\([^/]+\\)" log-group)
-      (format "*%s:%s:%s-%s*"
-              prefix
-              (cloudwatch-get-region)
-              (match-string 1 log-group)
-              (match-string 2 log-group)))
-     ((string-match "/aws/lambda/\\([^/]+\\)" log-group)
-      (format "*%s:%s:lambda-%s*"
-              prefix
-              (cloudwatch-get-region)
-              (match-string 1 log-group)))
-     (t (let ((parts (split-string log-group "/")))
-          (format "*%s:%s:%s*"
-                  prefix
-                  (cloudwatch-get-region)
-                  (string-join (last parts 2) "-")))))))
+     ((null groups) "Groups: Not set")
+     ((null cloudwatch-insights-log-groups)
+      (format "Groups: %s (current)"
+              (truncate-string-to-width (car groups) 40)))
+     (t (format "Groups: %s%s"
+                (string-join (mapcar #'cloudwatch--group-label
+                                     (seq-take groups 2))
+                             ", ")
+                (if (> (length groups) 2)
+                    (format " (+%d)" (- (length groups) 2))
+                  ""))))))
+
+(defun cloudwatch--current-time-params ()
+  "Snapshot of the current time settings as a plist."
+  (list :time-mode cloudwatch-time-mode
+        :minutes cloudwatch-current-minutes
+        :start cloudwatch-start-time
+        :end cloudwatch-end-time))
 
 (defun cloudwatch--setup-highlighting ()
   "Setup common highlighting patterns."
@@ -342,6 +425,23 @@ Respects `cloudwatch-insights-column-widths' and `cloudwatch-wide-mode'."
               (format-time-string "%Y-%m-%d %H:%M" cloudwatch-end-time))
     (format "Last %d minutes" cloudwatch-current-minutes)))
 
+;; Insights @timestamp values are UTC, so show the window in both zones.
+(defun cloudwatch--time-description-utc (start end)
+  "Describe the current time range with its UTC equivalent.
+START and END are the epoch seconds actually sent to AWS."
+  (concat (cloudwatch--time-description)
+          (if (eq cloudwatch-time-mode 'absolute)
+              (format-time-string " %Z" end)
+            "")
+          (format " (%s–%s UTC)"
+                  (format-time-string "%Y-%m-%d %H:%M" start t)
+                  (format-time-string
+                   (if (string= (format-time-string "%F" start t)
+                                (format-time-string "%F" end t))
+                       "%H:%M"
+                     "%Y-%m-%d %H:%M")
+                   end t))))
+
 (defun cloudwatch--read-multiline (prompt &optional initial)
   "Read a multiline string from the minibuffer.
 PROMPT is displayed.  INITIAL is the starting text.
@@ -381,13 +481,18 @@ History is stored in `cloudwatch-insights-history', and mildly deduped."
 (defun cloudwatch-set-region ()
   "Set AWS region."
   (interactive)
-  (setq cloudwatch-current-region
-        (completing-read "AWS Region: "
-                         '("us-west-1" "us-west-2" "us-east-1" "us-east-2"
-                           "eu-west-1" "eu-central-1" "ap-southeast-1" "ap-northeast-1")
-                         nil nil (cloudwatch-get-region)))
-  ;; Clear cache when region changes
-  (setq cloudwatch-log-groups-cache nil)
+  (let ((old (cloudwatch-get-region)))
+    (setq cloudwatch-current-region
+          (completing-read "AWS Region: "
+                           '("us-west-1" "us-west-2" "us-east-1" "us-east-2"
+                             "eu-west-1" "eu-central-1" "ap-southeast-1" "ap-northeast-1")
+                           nil nil old))
+    (unless (equal old cloudwatch-current-region)
+      ;; Log group names are region-specific
+      (setq cloudwatch-log-groups-cache nil)
+      (when cloudwatch-insights-log-groups
+        (setq cloudwatch-insights-log-groups nil)
+        (message "Insights log groups cleared (region changed)"))))
   (cloudwatch-transient))
 
 (defun cloudwatch-set-log-group ()
@@ -486,10 +591,12 @@ History is stored in `cloudwatch-insights-history', and mildly deduped."
                                (not (string-empty-p cloudwatch-current-filter)))
                           (format " --filter-pattern %s" (shell-quote-argument cloudwatch-current-filter))
                         ""))
-         (cmd (format "aws logs filter-log-events --log-group-name %s --region %s --start-time %d --limit %d --output text%s"
+         ;; filter-log-events takes epoch milliseconds (unlike start-query)
+         (cmd (format "aws logs filter-log-events --log-group-name %s --region %s --start-time %d --end-time %d --limit %d --output text%s"
                       (shell-quote-argument cloudwatch-current-log-group)
                       (shell-quote-argument (cloudwatch-get-region))
                       (cloudwatch--start-time-millis)
+                      (cloudwatch--end-time-millis)
                       cloudwatch-query-limit
                       filter-args))
          (process-environment (cons "AWS_PAGER="
@@ -678,131 +785,214 @@ History is stored in `cloudwatch-insights-history', and mildly deduped."
              (cdr (assoc choice choices)))))
    (cloudwatch-transient)))
 
-(defun cloudwatch-do-insights-query ()
-  "Execute CloudWatch Insights query."
+;;;;; Insights log group selection
+(defun cloudwatch--log-group-candidates ()
+  "Favorites plus all cached log groups, deduplicated."
+  (delete-dups (append (copy-sequence cloudwatch-favorite-log-groups)
+                       (cloudwatch-list-log-groups))))
+
+(defun cloudwatch--set-insights-groups (groups)
+  "Validate GROUPS and set them as the Insights log groups."
+  (let ((groups (delete-dups
+                 (seq-remove #'string-empty-p
+                             (mapcar #'string-trim groups)))))
+    (when (> (length groups) cloudwatch--insights-max-log-groups)
+      (user-error "Insights supports at most %d log groups (got %d)"
+                  cloudwatch--insights-max-log-groups (length groups)))
+    (setq cloudwatch-insights-log-groups groups)))
+
+(defun cloudwatch-set-insights-log-groups ()
+  "Choose the log groups for Insights queries."
   (interactive)
-  (let* ((buffer-name (format "*CW-Insights:%s:%s*"
-                              (cloudwatch-get-region)
-                              (car (last (split-string cloudwatch-current-log-group "/") 2))))
-         (output-buffer (get-buffer-create buffer-name)))
+  (cloudwatch-with-transient-fallback
+   (cloudwatch--set-insights-groups
+    (completing-read-multiple
+     "Insights log groups (comma-separated): "
+     (cloudwatch--log-group-candidates) nil nil
+     (string-join (cloudwatch--insights-groups) ",")
+     'cloudwatch-insights-groups-history))
+   (cloudwatch-transient)))
 
+(defun cloudwatch-add-insights-log-group ()
+  "Add a log group to the Insights selection.
+Starts from the current log group if no Insights groups are set."
+  (interactive)
+  (cloudwatch-with-transient-fallback
+   (let* ((current (cloudwatch--insights-groups))
+          (group (completing-read
+                  "Add log group to Insights: "
+                  (seq-difference (cloudwatch--log-group-candidates) current)
+                  nil nil nil 'cloudwatch-history)))
+     (cloudwatch--set-insights-groups (append current (list group))))
+   (cloudwatch-transient)))
+
+(defun cloudwatch-remove-insights-log-group ()
+  "Remove a log group from the Insights selection."
+  (interactive)
+  (cloudwatch-with-transient-fallback
+   (unless cloudwatch-insights-log-groups
+     (user-error "Insights is using the current log group; nothing to remove"))
+   (cloudwatch--set-insights-groups
+    (remove (completing-read "Remove log group: "
+                             cloudwatch-insights-log-groups nil t)
+            cloudwatch-insights-log-groups))
+   (cloudwatch-transient)))
+
+(defun cloudwatch-clear-insights-log-groups ()
+  "Clear Insights log groups, falling back to the current log group."
+  (interactive)
+  (setq cloudwatch-insights-log-groups nil)
+  (message "Insights log groups cleared")
+  (cloudwatch-transient))
+
+;;;;; Insights query execution
+(defun cloudwatch--insights-run-current-p (buffer run)
+  "Non-nil if RUN is still the active run in live BUFFER."
+  (and (buffer-live-p buffer)
+       (eq (buffer-local-value 'cloudwatch--insights-run buffer) run)))
+
+(defun cloudwatch--insights-set-status (buffer status)
+  "Replace the running marker in BUFFER with STATUS."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (save-excursion
+          (goto-char (point-min))
+          (when (search-forward cloudwatch--insights-running-marker nil t)
+            (replace-match status t t)))))))
+
+(defun cloudwatch-do-insights-query ()
+  "Start a CloudWatch Insights query across the selected log groups."
+  (interactive)
+  (let* ((groups (cloudwatch--insights-groups))
+         (region (cloudwatch-get-region))
+         (query cloudwatch-insights-query)
+         ;; NOTE: StartQuery documents epoch *seconds* (unlike
+         ;; filter-log-events).  Previous versions sent millis.
+         (start (/ (cloudwatch--start-time-millis) 1000))
+         (end (/ (cloudwatch--end-time-millis) 1000))
+         (run (make-symbol "cw-insights-run"))
+         (buffer (get-buffer-create
+                  (format "*CW-Insights:%s:%s%s*"
+                          region
+                          (cloudwatch--group-label (car groups))
+                          (if (cdr groups)
+                              (format "+%d" (length (cdr groups)))
+                            "")))))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (setq-local cloudwatch--insights-run run)
+        (setq-local cloudwatch-insights-results nil)
+        (setq-local cloudwatch-insights-query-info
+                    (append (list :log-groups groups :region region :query query)
+                            (cloudwatch--current-time-params)))
+        (insert "═══ CloudWatch Insights Query ═══\n")
+        (if (cdr groups)
+            (progn
+              (insert (format "Log Groups (%d):\n" (length groups)))
+              (dolist (g groups) (insert "  " g "\n")))
+          (insert (format "Log Group: %s\n" (car groups))))
+        (insert (format "Region: %s\n" region))
+        (insert (format "Time Range: %s\n" (cloudwatch--time-description-utc start end)))
+        (insert (format "Query: %s\n" query))
+        (insert "─────────────────────────────────\n")
+        (insert cloudwatch--insights-running-marker "\n")))
+    (switch-to-buffer buffer)
     (message "Starting Insights query...")
-    (let* ((start-time (cloudwatch--start-time-millis))
-           (end-time (cloudwatch--end-time-millis))
-           (start-cmd (format "aws logs start-query --log-group-name %s --region %s --start-time %d --end-time %d --query-string %s --output text"
-                              (shell-quote-argument cloudwatch-current-log-group)
-                              (shell-quote-argument (cloudwatch-get-region))
-                              start-time
-                              end-time
-                              (shell-quote-argument cloudwatch-insights-query)))
-           ;; Use our error-handling wrapper here
-           (query-id-output (cloudwatch--run-aws-command start-cmd)))
-
-      ;; Check if we got a valid query ID back
-      (unless query-id-output
-        (user-error "Failed to start Insights query"))
-
-      (let ((query-id (string-trim query-id-output)))
-        (when (string-empty-p query-id)
-          (user-error "Failed to start Insights query - empty response"))
-
-        (with-current-buffer output-buffer
-          (let ((inhibit-read-only t))
-            (erase-buffer)
-            ;; Store query params for refresh
-            (setq-local cloudwatch-insights-query-info
-                        (list :log-group cloudwatch-current-log-group
-                              :region cloudwatch-current-region
-                              :minutes cloudwatch-current-minutes
-                              :query cloudwatch-insights-query))
-            (insert "═══ CloudWatch Insights Query ═══\n")
-            (insert (format "Log Group: %s\n" cloudwatch-current-log-group))
-            (insert (format "Region: %s\n" (cloudwatch-get-region)))
-            (insert (format "Time Range: %s\n" (cloudwatch--time-description)))
-            (insert (format "Query: %s\n" cloudwatch-insights-query))
-            (insert "─────────────────────────────────\n")
-            (insert "⏳ Query running...\n")))
-
-        (switch-to-buffer output-buffer)
-
-        ;; Poll for results
-        (cloudwatch-insights-poll-results query-id output-buffer)))))
+    (cloudwatch--aws-async
+     (append (list "logs" "start-query"
+                   "--region" region
+                   "--start-time" (number-to-string start)
+                   "--end-time" (number-to-string end)
+                   "--query-string" query
+                   "--query" "queryId"
+                   "--output" "text"
+                   ;; One flag, many values: repeating the flag keeps only the last
+                   "--log-group-names")
+             groups)
+     (lambda (output err)
+       (when (cloudwatch--insights-run-current-p buffer run)
+         (let ((query-id (and output (string-trim output))))
+           (cond
+            (err
+             (cloudwatch--insights-set-status buffer (format "✗ %s" err))
+             (message "Insights query failed to start: %s" err))
+            ((string-empty-p query-id)
+             (cloudwatch--insights-set-status
+              buffer "✗ Failed to start query - empty response"))
+            (t
+             (cloudwatch-insights-poll-results query-id buffer region run)))))))))
 
 (defun cloudwatch-do-insights-query-safe ()
   "Execute Insights query, returning to transient on validation errors."
   (interactive)
   (cloudwatch-with-transient-fallback
-   (unless cloudwatch-current-log-group
-     (user-error "Please select a log group first"))
-
+   (unless (cloudwatch--insights-groups)
+     (user-error "Please select a log group or Insights log groups first"))
    (unless cloudwatch-insights-query
      (user-error "Please set an Insights query first"))
    (cloudwatch-do-insights-query)))
 
-(defun cloudwatch-insights-poll-results (query-id buffer &optional start-time)
-  "Poll for Insights QUERY-ID results in BUFFER.
+(defun cloudwatch-insights-poll-results (query-id buffer region run &optional start-time)
+  "Poll asynchronously for Insights QUERY-ID results in REGION.
+Results go to BUFFER while RUN is still its active run.
 START-TIME tracks when polling began for timeout detection."
   (let ((start-time (or start-time (float-time))))
     (run-with-timer
      2 nil
      (lambda ()
        (cond
-        ;; Buffer killed, silently abandon it, no one cares
-        ((not (buffer-live-p buffer))
-         (message "Query buffer closed, abandoning poll"))
-
-        ;; Timeout so we don't create an unbound timer chain and rip a hole in space-time
+        ;; Buffer killed or query rerun: drop this chain
+        ((not (cloudwatch--insights-run-current-p buffer run)) nil)
+        ;; Timeout so we don't create an unbound timer chain
         ((> (- (float-time) start-time) cloudwatch-insights-poll-timeout)
-         (with-current-buffer buffer
-           (let ((inhibit-read-only t))
-             (goto-char (point-min))
-             (when (search-forward "⏳ Query running..." nil t)
-               (replace-match (format "⏱ Timed out after %ds (query may still be running on AWS)"
-                                      cloudwatch-insights-poll-timeout)))))
+         (cloudwatch--insights-set-status
+          buffer (format "⏱ Timed out after %ds (query may still be running on AWS)"
+                         cloudwatch-insights-poll-timeout))
          (message "Insights query polling timed out"))
-
-        ;; Polling normally with out a time paradox
         (t
-         (condition-case err
-             (let* ((cmd (format "aws logs get-query-results --query-id %s --region %s --output json"
-                                 (shell-quote-argument query-id)
-                                 (shell-quote-argument (cloudwatch-get-region))))
-                    (output (cloudwatch--run-aws-command cmd))
-                    (result (and output (json-parse-string output :object-type 'alist)))
-                    (status (and result (alist-get 'status result))))
-               (pcase status
-                 ("Complete"
-                  (with-current-buffer buffer
-                    (let ((inhibit-read-only t))
-                      (save-excursion
-                        (goto-char (point-min))
-                        (search-forward "⏳ Query running..." nil t)
-                        (replace-match "✓ Query complete!"))
-                      (goto-char (point-max))
-                      (insert "\n")
-                      (cloudwatch-insights-format-results (alist-get 'results result))
-                      (read-only-mode 1)
-                      (cloudwatch-insights-results-mode 1)
-                      (cloudwatch--setup-highlighting)
-                      (message "Insights query complete!"))))
+         (cloudwatch--aws-async
+          (list "logs" "get-query-results"
+                "--query-id" query-id
+                "--region" region
+                "--output" "json")
+          (lambda (output err)
+            (when (cloudwatch--insights-run-current-p buffer run)
+              (if err
+                  (progn
+                    (cloudwatch--insights-set-status buffer (format "✗ Error: %s" err))
+                    (message "Insights query error: %s" err))
+                (cloudwatch--insights-handle-result
+                 output query-id buffer region run start-time)))))))))))
 
-                 ("Failed"
-                  (with-current-buffer buffer
-                    (let ((inhibit-read-only t))
-                      (goto-char (point-min))
-                      (when (search-forward "⏳ Query running..." nil t)
-                        (replace-match "✗ Query failed!")))
-                    (message "Insights query failed!")))
-
-                 ((or "Running" "Scheduled" `nil)
-                  (cloudwatch-insights-poll-results query-id buffer start-time))))
-           (error
-            (with-current-buffer buffer
-              (let ((inhibit-read-only t))
-                (goto-char (point-min))
-                (when (search-forward "⏳ Query running..." nil t)
-                  (replace-match (format "Error: %s" (error-message-string err))))))
-            (message "Insights query error: %s" (error-message-string err))))))))))
+(defun cloudwatch--insights-handle-result (output query-id buffer region run start-time)
+  "Handle get-query-results OUTPUT for QUERY-ID in BUFFER.
+Keeps polling via REGION, RUN and START-TIME until the query is done."
+  (let* ((result (condition-case nil
+                     (json-parse-string output :object-type 'alist :null-object nil)
+                   (json-parse-error nil)))
+         (status (alist-get 'status result)))
+    (pcase status
+      ('nil
+       (cloudwatch--insights-set-status buffer "✗ Could not parse query results")
+       (message "Insights query: unparseable response"))
+      ("Complete"
+       (cloudwatch--insights-set-status buffer "✓ Query complete!")
+       (with-current-buffer buffer
+         (let ((inhibit-read-only t))
+           (goto-char (point-max))
+           (insert "\n")
+           (cloudwatch-insights-format-results (alist-get 'results result))
+           (read-only-mode 1)
+           (cloudwatch-insights-results-mode 1)
+           (cloudwatch--setup-highlighting)))
+       (message "Insights query complete!"))
+      ((or "Failed" "Cancelled" "Timeout")
+       (cloudwatch--insights-set-status buffer (format "✗ Query %s!" (downcase status)))
+       (message "Insights query %s" (downcase status)))
+      (_ ; Running / Scheduled / Unknown
+       (cloudwatch-insights-poll-results query-id buffer region run start-time)))))
 
 (defun cloudwatch-insights-format-results (results)
   "Format Insights RESULTS for display.
@@ -892,23 +1082,27 @@ Uses buffer-local `cloudwatch-insights-query-info' for metadata."
 (defun cloudwatch-rerun-insights ()
   "Rerun the Insights query with stored parameters."
   (interactive)
-  (if cloudwatch-insights-query-info
-      (let ((cloudwatch-current-log-group (plist-get cloudwatch-insights-query-info :log-group))
-            (cloudwatch-current-region (plist-get cloudwatch-insights-query-info :region))
-            (cloudwatch-current-minutes (plist-get cloudwatch-insights-query-info :minutes))
-            (cloudwatch-insights-query (plist-get cloudwatch-insights-query-info :query)))
-        (cloudwatch-do-insights-query))
-    ;; Fallback to current globals
-    (cloudwatch-do-insights-query)))
+  (let ((info cloudwatch-insights-query-info))
+    (if info
+        (let ((cloudwatch-insights-log-groups (plist-get info :log-groups))
+              (cloudwatch-current-region (plist-get info :region))
+              (cloudwatch-time-mode (plist-get info :time-mode))
+              (cloudwatch-current-minutes (plist-get info :minutes))
+              (cloudwatch-start-time (plist-get info :start))
+              (cloudwatch-end-time (plist-get info :end))
+              (cloudwatch-insights-query (plist-get info :query)))
+          (cloudwatch-do-insights-query))
+      ;; Fallback to current globals
+      (cloudwatch-do-insights-query))))
 
 (defun cloudwatch-insights-expand-time ()
   "Double the time range and rerun Insights query.
-Only available in relative time mode."
+Only available for queries run in relative time mode."
   (interactive)
   (cond
    ((null cloudwatch-insights-query-info)
     (message "No query info stored - run a query first"))
-   ((eq cloudwatch-time-mode 'absolute)
+   ((eq (plist-get cloudwatch-insights-query-info :time-mode) 'absolute)
     (message "Time expansion not available in date range mode - use T to adjust"))
    (t
     (let ((new-minutes (* 2 (plist-get cloudwatch-insights-query-info :minutes))))
@@ -969,7 +1163,14 @@ Only available in relative time mode."
                     (if cloudwatch-insights-query
                         (format "Query: %s" (truncate-string-to-width cloudwatch-insights-query 40))
                       "Query: Not set")))
-    ("I" "Run Insights query" cloudwatch-do-insights-query-safe :transient nil)]]
+    ("I" "Run Insights query" cloudwatch-do-insights-query-safe :transient nil)]
+   [("g" "Set log groups" cloudwatch-set-insights-log-groups
+     :description cloudwatch--insights-groups-description)
+    ("+" "Add log group" cloudwatch-add-insights-log-group)
+    ("-" "Remove log group" cloudwatch-remove-insights-log-group
+     :if (lambda () cloudwatch-insights-log-groups))
+    ("0" "Clear (use current log group)" cloudwatch-clear-insights-log-groups
+     :if (lambda () cloudwatch-insights-log-groups))]]
   ["Favorites"
    :class transient-column
    :setup-children cloudwatch-favorites-setup]

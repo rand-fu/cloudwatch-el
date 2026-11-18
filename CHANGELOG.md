@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 1.1.0
+
+### Added
+- Multi-log-group CloudWatch Insights queries (up to 50 groups).
+  Keys: `g` set, `+` add, `-` remove, `0` clear. Falls back to the
+  current log group when unset; cleared on region change.
+- Insights header shows the time zone and UTC window to match `@timestamp`.
+
+### Changed
+- Insights start/poll now run asynchronously; Emacs no longer blocks while polling.
+- Insights `start-query` now sends epoch seconds (per API docs).
+
+### Fixed
+- Insights rerun/expand use the stored time mode, range and region.
+- Insights polling uses the query's region, not the current global region.
+- Rerunning an Insights query no longer lets a stale poll write into the buffer.
+- AWS error detection no longer misfires on log content in successful results.
+- Snapshot queries now respect the end time in absolute date-range mode.
+- Doom `SPC o C` key mapping so it doesn't wipe out everything else.
+
 ## 1.0.1
 
 ### Fixed 
