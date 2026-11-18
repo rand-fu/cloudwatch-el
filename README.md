@@ -16,6 +16,7 @@ This started as a collection of functions I wrote for myself that got a little o
 - Live tailing and snapshot queries
 - Simple filter patterns with quick presets
 - Advanced CloudWatch Insights filters
+- Insights queries across multiple log groups (up to 50)
 - Favorites management
 - Async operations to keep Emacs responsive 
 - Relative (minutes back) or absolute (date range) time selection
@@ -189,11 +190,16 @@ The default mode is relative (minutes back). Absolute time ranges are set per-se
 ### CloudWatch Insights
 - `i` - Set/select Insights query (presets + custom)
 - `I` - Execute Insights query
+- `g` - Set Insights log groups (comma-separated, with completion)
+- `+` - Add a log group to the Insights selection
+- `-` - Remove a log group from the Insights selection (shown when groups are set)
+- `0` - Clear Insights log groups and fall back to the current log group (shown when groups are set)
+
+When no Insights log groups are set, Insights uses the current log group (`l`/`L`). Changing region clears the Insights log groups, since log group names are region-specific.
 
 ### Favorites
 - `1-5` - Quick select from favorite log groups
 - `a` - Add current log group to favorites
-- `d` - Remove a log group from favorites
 - `C` - Clear all favorites
 
 ### Actions
@@ -230,7 +236,7 @@ T                         ; Set time range
 I                         ; Run Insights query
 ```
 
-Times are entered in your local timezone. Emacs handles the UTC conversion automatically. Press `C-t` in the transient to switch back to relative mode.
+Times are entered in your local timezone. Emacs handles the UTC conversion automatically. Insights `@timestamp` values are in UTC, so the Insights results header shows the window in both, e.g. `15:00 → 15:05 MST (2026-11-18 22:00–22:05 UTC)`. Press `C-t` in the transient to switch back to relative mode.
 
 ### CloudWatch Insights Queries
 
@@ -248,6 +254,26 @@ i                         ; Set Insights query
 fields @timestamp, @message | filter @message like /timeout/ | stats count() by bin(5m)
 I                         ; Run query
 ```
+
+### Querying Multiple Log Groups
+
+Insights can search up to 50 log groups in one query. Start from the group you're already looking at and add more:
+
+```
+M-x cloudwatch RET
+l                         ; Select a log group, e.g. /aws/lambda/checkout
+t                         ; Tail it
+
+M-x cloudwatch RET
++                         ; Add /aws/lambda/payments
++                         ; Add /aws/lambda/inventory
+i                         ; Set Insights query
+"Custom query"            ; Choose custom
+stats count() by @log     ; Event count per log group
+I                         ; Run query
+```
+
+The results buffer is named after the first group plus the number of others (e.g. `*CW-Insights:us-west-2:lambda-checkout+2*`), and the header lists every group. Press `0` to go back to the current log group only.
 
 
 ### Filter Pattern Examples

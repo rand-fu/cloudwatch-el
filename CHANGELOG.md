@@ -7,13 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-## 1.0.1
+## 1.1.0
 
-### Fixed 
+### Added
+- Multi-log-group CloudWatch Insights queries (up to 50 groups).
+  Keys: `g` set, `+` add, `-` remove, `0` clear. Falls back to the
+  current log group when unset; cleared on region change.
+- Insights header shows the time zone and UTC window to match `@timestamp`.
 
-- Doom now interprets the `("o" . "open")` label form as "bind `SPC o` to a fresh `(cons "open" (make-sparse-keymap))`"*, which *wipes out* everything already bound under`SPC o` (`find-file`, `projectile-find-file`, all the Doom-provided "open" bindings, etc.). Then it binds your `C` inside that new empty keymap.
+### Changed
+- Insights start/poll now run asynchronously; Emacs no longer blocks while polling.
+- Insights `start-query` now sends epoch seconds (per API docs).
 
-  Since `SPC o` is already labeled "open" upstream by Doom, we don't need to relabel it. 
+### Fixed
+- Insights rerun/expand use the stored time mode, range and region.
+- Insights polling uses the query's region, not the current global region.
+- Rerunning an Insights query no longer lets a stale poll write into the buffer.
+- AWS error detection no longer misfires on log content in successful results.
+- Snapshot queries now respect the end time in absolute date-range mode.
+- Doom `SPC o C` key mapping so it doesn't wipe out everything else.
 
 ## 1.0.1
 

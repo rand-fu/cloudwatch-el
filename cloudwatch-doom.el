@@ -5,11 +5,11 @@
 ;; Author: Randol Reeves <randol.reeves+emacs@gmail.com>
 ;; Maintainer: Randol Reeves <randol.reeves+emacs@gmail.com>
 ;; Created: November 04, 2025
-;; Modified: July 15, 2026
-;; Version: 1.0.2
+;; Modified: November 18, 2026
+;; Version: 1.1.0
 ;; Keywords: tools aws cloudwatch logs monitoring devops kubernetes observability
 ;; Homepage: https://github.com/rand-fu/cloudwatch-el
-;; Package-Requires: ((emacs "29.1") (cloudwatch "1.0.2"))
+;; Package-Requires: ((emacs "29.1") (cloudwatch "1.1.0"))
 ;;
 ;; This file is not part of GNU Emacs.
 ;;
